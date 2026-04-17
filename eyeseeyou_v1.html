@@ -1,0 +1,2531 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
+<title>EyeSeeYou v1</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#000;overflow:hidden;font-family:'Space Mono',monospace;color:#fff;cursor:crosshair;touch-action:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none;}
+#canvas-container{width:100vw;height:100vh;height:100dvh;position:fixed;top:0;left:0;}
+#webcam-debug{position:fixed;bottom:16px;left:16px;width:180px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;z-index:100;display:none;opacity:0.6;}
+#panel{position:fixed;top:0;right:0;width:310px;height:100vh;height:100dvh;background:rgba(5,5,10,0.93);backdrop-filter:blur(14px);border-left:1px solid rgba(255,255,255,0.06);z-index:200;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 50px;font-size:11px;}
+#panel.open{transform:translateX(0);}
+#panel h3{font-size:9px;text-transform:uppercase;letter-spacing:3px;color:rgba(255,255,255,0.35);margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid rgba(255,255,255,0.05);}
+#panel h3:first-child{margin-top:0;}
+.pr{display:flex;align-items:center;margin:4px 0;gap:6px;}
+.pr label{flex:1;color:rgba(255,255,255,0.55);font-size:9px;}
+.pr input[type=range]{flex:1.5;accent-color:#556;height:2px;}
+.pr .v{width:34px;text-align:right;color:rgba(255,255,255,0.3);font-size:8px;font-family:'Space Mono',monospace;cursor:pointer;}.pr .v:hover{color:rgba(255,255,255,0.6);}
+.pr input[type=color]{width:24px;height:16px;border:1px solid rgba(255,255,255,0.12);background:none;cursor:pointer;border-radius:2px;padding:0;}
+#panel-toggle{position:fixed;top:14px;right:14px;z-index:300;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+#bottombar{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:150;display:flex;gap:8px;align-items:center;}
+#emotions{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.emo-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:16px;width:34px;height:34px;border-radius:50%;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+.emo-btn:hover{background:rgba(255,255,255,0.1);transform:scale(1.12);}
+.emo-btn.active{background:rgba(255,255,255,0.15);border-color:rgba(255,255,255,0.4);}
+#modes{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.mode-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.6);font-size:8px;letter-spacing:1px;text-transform:uppercase;padding:6px 10px;border-radius:12px;cursor:pointer;transition:all 0.2s;font-family:'Space Mono',monospace;-webkit-tap-highlight-color:transparent;}
+.mode-btn:hover{background:rgba(255,255,255,0.08);}
+.mode-btn.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.35);color:#fff;}
+#loading{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;transition:opacity 0.8s;}
+#loading.hidden{opacity:0;pointer-events:none;}
+#loading h1{font-size:38px;letter-spacing:5px;margin-bottom:14px;}
+.le{width:9px;height:9px;background:#fff;border-radius:50%;display:inline-block;margin:0 3px;animation:bl 2s infinite;}
+.le:nth-child(2){animation-delay:0.15s;}
+@keyframes bl{0%,80%,100%{transform:scaleY(1);}90%{transform:scaleY(0.1);}}
+#loading-status{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.35);}
+#status{position:fixed;top:14px;left:14px;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.2);z-index:100;}
+.dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+.dot.active{background:#4f4;}.dot.inactive{background:#f44;}.dot.loading{background:#fa0;animation:pu 1s infinite;}
+@keyframes pu{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.ui-layer{transition:opacity 0.5s;}
+body.immersed .ui-layer{opacity:0;pointer-events:none;}
+body.immersed.ui-peek .ui-layer{opacity:1;pointer-events:auto;}
+#immerse-btn{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.5);font-size:8px;letter-spacing:2px;text-transform:uppercase;font-family:'Space Mono',monospace;padding:8px 16px;border-radius:14px;cursor:pointer;transition:all 0.3s;-webkit-tap-highlight-color:transparent;}
+#immerse-btn:hover{background:rgba(255,255,255,0.1);color:#fff;}
+body.immersed #immerse-btn{opacity:0;pointer-events:none;}
+body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
+@media(max-width:768px),(pointer:coarse){#panel{width:100%;}#bottombar{flex-direction:column;gap:5px;}}
+</style>
+</head>
+<body>
+
+<div id="loading"><h1>EYE<span class="le"></span><span class="le"></span>YOU</h1><div id="loading-status">Initializing...</div></div>
+<div id="canvas-container"></div>
+<video id="webcam-debug" autoplay playsinline muted></video>
+<div id="panel-toggle" class="ui-layer">&#9881;</div>
+<div id="immerse-btn" class="ui-layer">Immerse</div>
+
+<div id="panel" class="ui-layer">
+  <h3>Iris</h3>
+  <div class="pr"><label>Color Tint</label><input type="color" id="p-irisColorTint" value="#ffffff"><span class="v"></span></div>
+  <div class="pr"><label>Roughness</label><input type="range" id="p-irisRoughness" min="0" max="1" step="0.01" value="0.45"><span class="v">0.45</span></div>
+
+  <h3>Pupil</h3>
+  <div class="pr"><label>Size</label><input type="range" id="p-pupilSize" min="0" max="1" step="0.01" value="0.35"><span class="v">0.35</span></div>
+  <div class="pr"><label>Cat</label><input type="range" id="p-pupilCat" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Goat</label><input type="range" id="p-pupilGoat" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Heart</label><input type="range" id="p-pupilHeart" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Oval</label><input type="range" id="p-pupilOval" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Reptile</label><input type="range" id="p-pupilReptile" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+
+  <div class="pr"><label>Iris Depth</label><input type="range" id="p-irisDepth" min="-0.01" max="0.01" step="0.001" value="-0.001"><span class="v">-0.001</span></div>
+  <div class="pr"><label>Iris Parallax</label><input type="range" id="p-irisParallax" min="0" max="0.02" step="0.001" value="0.005"><span class="v">0.005</span></div>
+
+  <h3>Iris Shape</h3>
+  <div class="pr"><label>Grow</label><input type="range" id="p-irisGrow" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Shrink</label><input type="range" id="p-irisShrink" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+
+  <h3>Cornea</h3>
+  <div class="pr"><label>Iris Bulge</label><input type="range" id="p-corneaBulge" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Global Bulge</label><input type="range" id="p-corneaGlobalBulge" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Specular</label><input type="range" id="p-corneaSpecular" min="0" max="2" step="0.01" value="1.63"><span class="v">1.63</span></div>
+  <div class="pr"><label>Roughness</label><input type="range" id="p-corneaRoughness" min="0" max="0.3" step="0.005" value="0.13"><span class="v">0.13</span></div>
+  <div class="pr"><label>IOR</label><input type="range" id="p-corneaIor" min="1.0" max="2.5" step="0.01" value="1.376"><span class="v">1.38</span></div>
+  <div class="pr"><label>Env Map</label><input type="range" id="p-corneaEnv" min="0" max="5" step="0.1" value="2.5"><span class="v">2.50</span></div>
+  <div class="pr"><label>Transmission</label><input type="range" id="p-corneaTransmission" min="0" max="1" step="0.01" value="0.99"><span class="v">0.99</span></div>
+  <div class="pr"><label>Thickness</label><input type="range" id="p-corneaThickness" min="0" max="2" step="0.05" value="0.05"><span class="v">0.05</span></div>
+  <div class="pr"><label>Clearcoat</label><input type="range" id="p-corneaClearcoat" min="0" max="1" step="0.01" value="1.0"><span class="v">1.00</span></div>
+
+  <h3>Sclera</h3>
+  <div class="pr"><label>Opacity</label><input type="range" id="p-scleraOpacity" min="0" max="1" step="0.01" value="1.0"><span class="v">1.00</span></div>
+  <div class="pr"><label>Roughness</label><input type="range" id="p-scleraRoughness" min="0" max="1" step="0.01" value="0.3"><span class="v">0.30</span></div>
+  <div class="pr"><label>Env Intensity</label><input type="range" id="p-envIntensity" min="0" max="3" step="0.05" value="1.0"><span class="v">1.00</span></div>
+  <div class="pr"><label>Limbus Ring</label><input type="range" id="p-limbusOpacity" min="0" max="1" step="0.02" value="0.35"><span class="v">0.35</span></div>
+  <div class="pr"><label>Tear Film</label><input type="range" id="p-tearFilm" min="0" max="0.5" step="0.01" value="0.12"><span class="v">0.12</span></div>
+  <div class="pr"><label>Catch Light</label><input type="range" id="p-catchLight" min="0" max="1" step="0.02" value="0.70"><span class="v">0.70</span></div>
+
+  <h3>Scale</h3>
+  <div class="pr"><label>Eyeball</label><input type="range" id="p-eyeballScale" min="0.5" max="2.0" step="0.01" value="2.0"><span class="v">2.00</span></div>
+  <div class="pr"><label>Cornea</label><input type="range" id="p-corneaScale" min="0.5" max="1.5" step="0.01" value="0.80"><span class="v">0.80</span></div>
+  <div class="pr"><label>Skin</label><input type="range" id="p-skinScale" min="0.5" max="1.5" step="0.01" value="0.73"><span class="v">0.73</span></div>
+
+  <h3>Eyelids</h3>
+  <div class="pr"><label>3D Lids</label><input type="range" id="p-lid3d" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
+  <div class="pr"><label>Openness</label><input type="range" id="p-lidOpen" min="0" max="1.5" step="0.01" value="0.67"><span class="v">0.67</span></div>
+  <div class="pr"><label>Upper Tilt</label><input type="range" id="p-lidUpperTilt" min="-0.4" max="0.4" step="0.01" value="-0.22"><span class="v">-0.22</span></div>
+  <div class="pr"><label>Lower Tilt</label><input type="range" id="p-lidLowerTilt" min="-0.4" max="0.4" step="0.01" value="-0.02"><span class="v">-0.02</span></div>
+  <div class="pr"><label>Slant</label><input type="range" id="p-lidSlant" min="-0.5" max="0.5" step="0.01" value="0.01"><span class="v">0.01</span></div>
+  <div class="pr"><label>Width</label><input type="range" id="p-lidWidth" min="0.5" max="1.4" step="0.01" value="1.08"><span class="v">1.08</span></div>
+  <div class="pr"><label>Upper Thick</label><input type="range" id="p-lidUpperThickness" min="0" max="2" step="0.05" value="0.65"><span class="v">0.65</span></div>
+  <div class="pr"><label>Lower Thick</label><input type="range" id="p-lidLowerThickness" min="0" max="2" step="0.05" value="0.65"><span class="v">0.65</span></div>
+  <div class="pr"><label>Lower Ratio</label><input type="range" id="p-lidLowerRatio" min="0" max="1.0" step="0.01" value="0.60"><span class="v">0.60</span></div>
+  <div class="pr"><label>Corner Sharp</label><input type="range" id="p-lidCornerSharp" min="0.5" max="3" step="0.1" value="1.2"><span class="v">1.20</span></div>
+  <div class="pr"><label>Crease Depth</label><input type="range" id="p-lidCreaseDepth" min="0" max="1" step="0.05" value="0.4"><span class="v">0.40</span></div>
+  <div class="pr"><label>Lid Shadow</label><input type="range" id="p-lidShadow" min="0" max="1.0" step="0.02" value="0.30"><span class="v">0.30</span></div>
+  <div class="pr"><label>Skin Color</label><input type="color" id="p-lidSkinColor" value="#c4956a"><span class="v"></span></div>
+  <div class="pr"><label>Lower Color</label><input type="color" id="p-lidLowerColor" value="#c4956a"><span class="v"></span></div>
+  <div class="pr"><label>Edge Color</label><input type="color" id="p-lidEdgeColor" value="#bb7066"><span class="v"></span></div>
+  <div class="pr"><label>Outer Angle</label><input type="range" id="p-lidOuterAngle" min="-0.3" max="0.3" step="0.01" value="0.08"><span class="v">0.08</span></div>
+  <div class="pr"><label>Lid Roughness</label><input type="range" id="p-lidRoughness" min="0" max="1" step="0.01" value="0.65"><span class="v">0.65</span></div>
+  <div class="pr"><label>Lid Sheen</label><input type="range" id="p-lidSheen" min="0" max="1" step="0.01" value="1.0"><span class="v">1.00</span></div>
+  <div class="pr"><label>Lid Clearcoat</label><input type="range" id="p-lidClearcoat" min="0" max="1" step="0.01" value="0.05"><span class="v">0.05</span></div>
+  <div class="pr"><label>Lashes</label><input type="range" id="p-lashesShow" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
+  <div class="pr"><label>Skin Texture</label><input type="range" id="p-skinTexture" min="0" max="0.01" step="0.001" value="0.003"><span class="v">0.003</span></div>
+
+  <h3>Eyebrows</h3>
+  <div class="pr"><label>Show</label><input type="range" id="p-browShow" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
+  <div class="pr"><label>Height</label><input type="range" id="p-browHeight" min="-0.3" max="0.3" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Thickness</label><input type="range" id="p-browThickness" min="0.3" max="2.0" step="0.05" value="1.0"><span class="v">1.00</span></div>
+
+  <h3>Layout</h3>
+  <div class="pr"><label>Scale</label><input type="range" id="p-eyeScale" min="0.4" max="2.5" step="0.05" value="1.15"><span class="v">1.15</span></div>
+  <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
+
+  <h3>Tracking</h3>
+  <div class="pr"><label>Smoothing</label><input type="range" id="p-smoothing" min="0.02" max="0.25" step="0.01" value="0.07"><span class="v">0.07</span></div>
+  <div class="pr"><label>Sensitivity</label><input type="range" id="p-sensitivity" min="0.3" max="2" step="0.05" value="1"><span class="v">1.00</span></div>
+  <div class="pr"><label>Max Travel</label><input type="range" id="p-maxTravel" min="0.1" max="0.9" step="0.01" value="0.42"><span class="v">0.42</span></div>
+  <div class="pr"><label>Globe Rotate</label><input type="range" id="p-globeRotate" min="0" max="1" step="0.05" value="0.8"><span class="v">0.80</span></div>
+  <div class="pr"><label>Parallax X</label><input type="range" id="p-parallaxX" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Parallax Y</label><input type="range" id="p-parallaxY" min="-0.5" max="0.5" step="0.01" value="-0.08"><span class="v">-0.08</span></div>
+
+  <h3>Vergence</h3>
+  <div class="pr"><label>Base</label><input type="range" id="p-vergenceBase" min="0" max="0.12" step="0.005" value="0.04"><span class="v">0.04</span></div>
+  <div class="pr"><label>Max Cross</label><input type="range" id="p-vergenceMax" min="0" max="0.5" step="0.01" value="0.3"><span class="v">0.30</span></div>
+
+  <h3>Environment</h3>
+  <div class="pr"><label>BG</label><input type="color" id="p-bgColor" value="#050508"><span class="v"></span></div>
+  <div class="pr"><label>Env Light</label><input type="range" id="p-envLight" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
+  <div class="pr"><label>Light Angle</label><input type="range" id="p-lightAngle" min="0" max="6.28" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Light Height</label><input type="range" id="p-lightHeight" min="-1" max="3" step="0.05" value="1.50"><span class="v">1.50</span></div>
+  <div class="pr"><label>Light Intensity</label><input type="range" id="p-lightIntensity" min="0" max="5" step="0.1" value="2.5"><span class="v">2.50</span></div>
+
+  <h3>Reflection</h3>
+  <div class="pr"><label>Source</label><select id="p-envSource" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #333;border-radius:3px;padding:2px 4px;font-size:11px;"><option value="default">Default</option><option value="image">Image</option><option value="photo">Photo</option><option value="video">Live Video</option></select></div>
+  <div class="pr"><label>Intensity</label><input type="range" id="p-reflectionIntensity" min="0" max="5" step="0.05" value="1.0"><span class="v">1.00</span></div>
+  <div class="pr" id="env-image-row" style="display:none"><label>File</label><input type="file" id="env-image-input" accept="image/*" style="flex:1;font-size:10px;color:#999;"></div>
+  <div class="pr" id="env-photo-row" style="display:none"><label></label><button id="env-photo-btn" style="flex:1;background:#2a2a4e;color:#ccc;border:1px solid #444;border-radius:3px;padding:4px 8px;font-size:11px;cursor:pointer;">Capture Webcam</button></div>
+
+  <hr style="border-color:rgba(255,255,255,0.08);margin:14px 0 8px">
+  <button id="make-default-btn" style="width:100%;padding:7px;background:rgba(255,255,255,0.06);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.6);border-radius:4px;cursor:pointer;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;">Save as Default</button>
+  <button id="reset-default-btn" style="width:100%;padding:7px;margin-top:4px;background:rgba(255,60,60,0.06);border:1px solid rgba(255,60,60,0.12);color:rgba(255,255,255,0.4);border-radius:4px;cursor:pointer;font-family:'Space Mono',monospace;font-size:9px;letter-spacing:1px;text-transform:uppercase;">Reset Defaults</button>
+</div>
+
+<div id="bottombar" class="ui-layer">
+  <div id="emotions">
+    <button class="emo-btn active" data-emo="neutral" title="Neutral">&#128528;</button>
+    <button class="emo-btn" data-emo="joy" title="Joy">&#128522;</button>
+    <button class="emo-btn" data-emo="anger" title="Anger">&#128544;</button>
+    <button class="emo-btn" data-emo="fear" title="Fear">&#128552;</button>
+    <button class="emo-btn" data-emo="sadness" title="Sadness">&#128546;</button>
+    <button class="emo-btn" data-emo="surprise" title="Surprise">&#128562;</button>
+    <button class="emo-btn" data-emo="contempt" title="Contempt">&#128530;</button>
+  </div>
+  <div id="modes">
+    <button class="mode-btn active" data-mode="continuous">Track</button>
+    <button class="mode-btn" data-mode="motion">Motion</button>
+    <button class="mode-btn" data-mode="jumpscare">Lurk</button>
+  </div>
+</div>
+<div id="status" class="ui-layer"><span class="dot loading" id="status-dot"></span><span id="status-text">Loading...</span></div>
+
+<!-- TF + BlazeFace -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
+<script type="importmap">
+{ "imports": {
+    "three": "https://cdn.jsdelivr.net/npm/three@0.170.0/build/three.module.js",
+    "three/addons/": "https://cdn.jsdelivr.net/npm/three@0.170.0/examples/jsm/",
+    "three-subdivide": "https://cdn.jsdelivr.net/npm/three-subdivide@1.1.3/build/index.module.js"
+} }
+</script>
+
+<script type="module">
+import * as THREE from 'three';
+import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
+import { mergeVertices } from 'three/addons/utils/BufferGeometryUtils.js';
+
+let LoopSubdivision = null;
+try {
+  const mod = await import('three-subdivide');
+  LoopSubdivision = mod.LoopSubdivision;
+  console.log('[SUBDIV] three-subdivide loaded');
+} catch (e) {
+  console.warn('[SUBDIV] three-subdivide not available, using computeVertexNormals only', e);
+}
+
+const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 0 && innerWidth < 1024);
+const R = 0.65;
+
+// Try to subdivide geometry for smoother silhouette. Falls back to original if it fails.
+// Skips geometry that has morph attributes (pupil shapes etc) since subdivision changes vertex count.
+function _trySubdivide(geo, label) {
+  if (!LoopSubdivision) return geo;
+  // Don't subdivide morphed geometry — morph targets can't survive vertex count changes
+  if (geo.morphAttributes && Object.keys(geo.morphAttributes).length > 0) {
+    console.log(`[SUBDIV] ${label}: skipping — has morph targets`);
+    return geo;
+  }
+  try {
+    // Convert non-indexed to indexed (required by LoopSubdivision)
+    let indexed = geo.index ? geo : mergeVertices(geo);
+    if (!indexed.index) { console.warn(`[SUBDIV] ${label}: mergeVertices failed to create index`); return geo; }
+    const vBefore = indexed.getAttribute('position').count;
+
+    const subdivided = LoopSubdivision.modify(indexed, 1, { split: false, uvSmooth: false, flatOnly: false });
+    const vAfter = subdivided.getAttribute('position').count;
+    console.log(`[SUBDIV] ${label}: ${vBefore} → ${vAfter} verts`);
+    if (vAfter === 0) { console.warn(`[SUBDIV] ${label}: 0 verts, reverting`); return geo; }
+    return subdivided;
+  } catch (e) {
+    console.warn(`[SUBDIV] ${label}: failed, using original`, e);
+    return geo;
+  }
+}
+
+// ============================================================
+// MORPH TARGET MAP
+// ============================================================
+const MORPH_MAP = {
+  pupilSize:    'Pupil \u00b7 Size',
+  pupilCat:     'Pupil \u00b7 Cat',
+  pupilGoat:    'Pupil \u00b7 Goat',
+  pupilHeart:   'Pupil \u00b7 Heart',
+  pupilOval:    'Pupil \u00b7 Oval',
+  pupilReptile: 'Pupil \u00b7 Reptile',
+  irisGrow:     'Iris \u00b7 Grow',
+  irisShrink:   'Iris \u00b7 Shrink',
+  corneaBulge:  'Cornea Bulge',
+};
+
+// ============================================================
+// ALMOND EYELID GEOMETRY
+// ============================================================
+
+function generateSkinBumpTexture(size = 256) {
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const imgData = ctx.createImageData(size, size);
+  const data = imgData.data;
+  // Multi-octave noise for pores + fine wrinkles
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const i = (y * size + x) * 4;
+      // Large-scale undulation
+      const n1 = Math.sin(x * 0.08) * Math.cos(y * 0.06) * 30;
+      // Medium pores
+      const n2 = (Math.sin(x * 0.5 + y * 0.3) * Math.cos(y * 0.7 - x * 0.2)) * 20;
+      // Fine grain
+      const n3 = (Math.random() - 0.5) * 40;
+      const v = 128 + n1 + n2 + n3;
+      data[i] = data[i + 1] = data[i + 2] = Math.max(0, Math.min(255, v));
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(imgData, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(4, 4);
+  return tex;
+}
+
+function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
+  const azimuthRange = Math.PI * 2; // full 360° coverage
+  const cornerSharp = params.cornerSharp || 1.2;
+  const outerAngle = params.outerAngle != null ? params.outerAngle : 0.08;
+  const edgeMax = 0.45;
+  const creaseMax = (params.creaseDepth != null ? params.creaseDepth : 1.0) * Math.PI / 2;
+  const sign = isUpper ? 1 : -1;
+
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const vertParams = []; // store u, v, basePolar, baseAzimuth per vertex
+
+  for (let j = 0; j <= segsV; j++) {
+    const v = j / segsV;
+    for (let i = 0; i <= segsU; i++) {
+      const u = i / segsU;
+      const azimuth = (-0.5 + u) * azimuthRange;
+
+      // Almond taper: sin^cornerSharp(u*PI) → 0 at corners, 1 at center
+      const taper = Math.pow(Math.sin(u * Math.PI), cornerSharp);
+      // Asymmetry: outer corner slightly higher
+      const asymShift = outerAngle * (u - 0.5);
+
+      const edgeAngle = taper * edgeMax;
+      const openAngle = THREE.MathUtils.lerp(edgeAngle, creaseMax, v);
+      const polar = Math.PI / 2 - sign * (openAngle + asymShift);
+
+      const x = radius * Math.sin(polar) * Math.sin(azimuth);
+      const y = radius * Math.cos(polar);
+      const z = radius * Math.sin(polar) * Math.cos(azimuth);
+
+      positions.push(x, y, z);
+      // Normal = outward from sphere center
+      const len = Math.sqrt(x * x + y * y + z * z) || 1;
+      normals.push(x / len, y / len, z / len);
+      uvs.push(u, v);
+      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth });
+    }
+  }
+
+  for (let j = 0; j < segsV; j++) {
+    for (let i = 0; i < segsU; i++) {
+      const a = j * (segsU + 1) + i;
+      const b = a + 1;
+      const c = a + (segsU + 1);
+      const d = c + 1;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  // Vertex colors for AO: darken toward crease (v→1) and toward back (u→0, u→1 = back of head)
+  const colors = new Float32Array((segsU + 1) * (segsV + 1) * 3);
+  for (let j = 0; j <= segsV; j++) {
+    const v = j / segsV;
+    for (let i = 0; i <= segsU; i++) {
+      const u = i / segsU;
+      const creaseAO = 1.0 - v * v * 0.5;
+      // taper-based AO: darken where lid is thin (near the edge opening)
+      const taper = Math.pow(Math.sin(u * Math.PI), 1.2);
+      const edgeAO = 1.0 - (1.0 - v) * taper * 0.3; // darker near edge where lid opens
+      const ao = creaseAO * edgeAO;
+      const idx = (j * (segsU + 1) + i) * 3;
+      colors[idx] = ao; colors[idx + 1] = ao; colors[idx + 2] = ao;
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.userData = { vertParams, radius, isUpper };
+  return geo;
+}
+
+function createLidEdgeStrip(outerGeo, innerGeo, segsU) {
+  const outerPos = outerGeo.getAttribute('position');
+  const innerPos = innerGeo.getAttribute('position');
+  const positions = [];
+  const normals = [];
+  const indices = [];
+
+  // Extract v=0 row (first segsU+1 vertices)
+  for (let i = 0; i <= segsU; i++) {
+    positions.push(outerPos.getX(i), outerPos.getY(i), outerPos.getZ(i));
+    positions.push(innerPos.getX(i), innerPos.getY(i), innerPos.getZ(i));
+    // Normal pointing downward/forward for the edge strip
+    const ox = outerPos.getX(i), oy = outerPos.getY(i), oz = outerPos.getZ(i);
+    const ix = innerPos.getX(i), iy = innerPos.getY(i), iz = innerPos.getZ(i);
+    const nx = (ox + ix) * 0.5, ny = (oy + iy) * 0.5 - 0.01, nz = (oz + iz) * 0.5;
+    const nl = Math.sqrt(nx * nx + ny * ny + nz * nz) || 1;
+    normals.push(nx / nl, ny / nl, nz / nl);
+    normals.push(nx / nl, ny / nl, nz / nl);
+  }
+
+  for (let i = 0; i < segsU; i++) {
+    const a = i * 2, b = a + 1, c = a + 2, d = a + 3;
+    indices.push(a, c, b, b, c, d);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  return geo;
+}
+
+function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 40) {
+  const pos = outerGeo.getAttribute('position');
+  const nrm = outerGeo.getAttribute('normal');
+  const verts = [];
+  const indices = [];
+
+  // Sample lash anchor points along the v=0 edge row
+  // Skip corners (first/last 10%) where lashes thin out
+  const startFrac = 0.08, endFrac = 0.92;
+  const startI = Math.floor(startFrac * segsU);
+  const endI = Math.ceil(endFrac * segsU);
+  const range = endI - startI;
+
+  for (let l = 0; l < lashCount; l++) {
+    // Distribute with slight randomness
+    const frac = startI + (l / (lashCount - 1)) * range + (Math.random() - 0.5) * 0.8;
+    const i = Math.max(0, Math.min(segsU, Math.round(frac)));
+
+    const ax = pos.getX(i), ay = pos.getY(i), az = pos.getZ(i);
+    const nx = nrm.getX(i), ny = nrm.getY(i), nz = nrm.getZ(i);
+
+    // Lash direction: outward (normal) + slight upward for upper, downward for lower
+    const lashLen = 0.012 + Math.random() * 0.018;  // 12-30mm scaled
+    const curl = 0.3 + Math.random() * 0.4;  // curl amount
+    const sign = isUpper ? 1 : -1;
+
+    // Base width (thicker at root, tapered at tip)
+    const baseW = 0.001 + Math.random() * 0.0005;
+
+    // Perpendicular to normal in XZ plane for width
+    const pLen = Math.sqrt(nx * nx + nz * nz) || 1;
+    const px = -nz / pLen, pz = nx / pLen;
+
+    // Root vertices (2) — left and right of anchor
+    const v0 = verts.length / 3;
+    verts.push(ax - px * baseW, ay, az - pz * baseW);
+    verts.push(ax + px * baseW, ay, az + pz * baseW);
+
+    // Tip vertex (1) — extended along normal + curl
+    const tipX = ax + nx * lashLen;
+    const tipY = ay + ny * lashLen + sign * lashLen * curl;
+    const tipZ = az + nz * lashLen;
+    verts.push(tipX, tipY, tipZ);
+
+    // Triangle: root-left, root-right, tip
+    indices.push(v0, v0 + 1, v0 + 2);
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+function createShadowStripGeometry(radius, segsU, isUpper, params = {}) {
+  // Thin crescent strip following the lid edge, on the sclera surface
+  const azimuthRange = Math.PI * 2; // full 360° — match lid geometry
+  const cornerSharp = params.cornerSharp || 1.2;
+  const outerAngle = params.outerAngle != null ? params.outerAngle : 0.08;
+  const shadowDepth = 3; // only 3 rows deep
+  const sign = isUpper ? 1 : -1;
+
+  const positions = [];
+  const normals = [];
+  const uvs = [];
+  const indices = [];
+  const vertParams = [];
+
+  for (let j = 0; j <= shadowDepth; j++) {
+    const v = j / shadowDepth;
+    for (let i = 0; i <= segsU; i++) {
+      const u = i / segsU;
+      const azimuth = (-0.5 + u) * azimuthRange;
+      const taper = Math.pow(Math.sin(u * Math.PI), cornerSharp);
+      const asymShift = outerAngle * (u - 0.5);
+
+      // Shadow sits just inside the lid edge, extending inward (toward equator)
+      const edgeAngle = taper * 0.45;
+      const openAngle = edgeAngle * (1.0 - v * 0.6); // shadow extends 60% from edge toward equator
+      const polar = Math.PI / 2 - sign * (openAngle + asymShift);
+
+      const x = radius * Math.sin(polar) * Math.sin(azimuth);
+      const y = radius * Math.cos(polar);
+      const z = radius * Math.sin(polar) * Math.cos(azimuth);
+
+      positions.push(x, y, z);
+      const len = Math.sqrt(x * x + y * y + z * z) || 1;
+      normals.push(x / len, y / len, z / len);
+      uvs.push(u, v);
+      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth });
+    }
+  }
+
+  for (let j = 0; j < shadowDepth; j++) {
+    for (let i = 0; i < segsU; i++) {
+      const a = j * (segsU + 1) + i;
+      const b = a + 1;
+      const c = a + (segsU + 1);
+      const d = c + 1;
+      indices.push(a, b, c, b, d, c);
+    }
+  }
+
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(normals, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+  geo.userData = { vertParams, radius, isUpper };
+  return geo;
+}
+
+// ============================================================
+// EMOTION PRESETS
+// ============================================================
+const EMOTIONS = {
+  neutral:  { lidOpen: 0.43, lidUpperTilt: -0.22, lidLowerTilt: -0.02, lidSlant: 0.01, pupilSize: 0.35, lidLowerRatio: 0.60, lidWidth: 1.08 },
+  joy:      { lidOpen: 0.62, lidUpperTilt: 0.06,  lidLowerTilt: 0.14,  lidSlant: 0.08, pupilSize: 0.25, lidLowerRatio: 0.38, lidWidth: 1.12 },
+  anger:    { lidOpen: 0.52, lidUpperTilt: -0.22, lidLowerTilt: 0.12,  lidSlant: -0.14, pupilSize: 0.15, lidLowerRatio: 0.32, lidWidth: 1.02 },
+  fear:     { lidOpen: 1.25, lidUpperTilt: 0.14,  lidLowerTilt: -0.1,  lidSlant: 0,    pupilSize: 0.10, lidLowerRatio: 0.12, lidWidth: 1.1 },
+  sadness:  { lidOpen: 0.58, lidUpperTilt: -0.12, lidLowerTilt: -0.04, lidSlant: 0.12, pupilSize: 0.22, lidLowerRatio: 0.18, lidWidth: 0.98 },
+  surprise: { lidOpen: 1.35, lidUpperTilt: 0.1,   lidLowerTilt: -0.14, lidSlant: 0,    pupilSize: 0.12, lidLowerRatio: 0.08, lidWidth: 1.18 },
+  contempt: { lidOpen: 0.68, lidUpperTilt: -0.06, lidLowerTilt: 0.06,  lidSlant: -0.2, pupilSize: 0.18, lidLowerRatio: 0.28, lidWidth: 0.98 },
+};
+
+
+// ============================================================
+// EYE RENDERER
+// ============================================================
+class EyeRenderer {
+  constructor(container) {
+    this.scene = new THREE.Scene();
+    this.camera = new THREE.PerspectiveCamera(38, innerWidth / innerHeight, 0.1, 100);
+    this.camera.position.z = 5;
+    this.renderer = new THREE.WebGLRenderer({ antialias: !IS_MOBILE, stencil: true });
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.renderer.setPixelRatio(Math.min(devicePixelRatio, IS_MOBILE ? 1.5 : 2));
+    this.renderer.toneMapping = THREE.ACESFilmicToneMapping;
+    this.renderer.toneMappingExposure = 1.1;
+    this.renderer.outputColorSpace = THREE.SRGBColorSpace;
+    // Shadow maps disabled — causes artifacts on curved eye geometry
+    // this.renderer.shadowMap.enabled = true;
+    // this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    container.appendChild(this.renderer.domElement);
+
+    // Debug side-view camera (toggle with G)
+    this.debugCamera = new THREE.PerspectiveCamera(38, 1, 0.1, 100);
+    this.debugCamera.position.set(5, 0, 0);
+    this.debugCamera.lookAt(0, 0, 0);
+    this.showDebugGizmo = false;
+
+    this.clock = new THREE.Clock();
+    this.eyeGroup = new THREE.Group();
+    this.scene.add(this.eyeGroup);
+    this.left = null;
+    this.right = null;
+    this.irisMaterials = [];
+    this.irisMeshes = [];
+    this.scleraMaterials = [];
+    this.corneaMaterials = [];
+    this.corneaMeshes = [];
+    this._corneaScaleFactor = 1.0;
+    this._globalBulgeFactor = 1.0;
+    this.keyLight = null;
+
+    // Environment reflection
+    this._envMode = 'default';
+    this._envSphere = null;
+    this._envCubeRT = null;
+    this._envCubeCamera = null;
+    this._envVideoEl = null;
+    this._envStream = null;
+    this._envFrameCount = 0;
+
+    this._setupEnv();
+    this._setupLights();
+    window.addEventListener('resize', () => this._onResize());
+  }
+
+  _setupEnv() {
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const es = new THREE.Scene();
+    es.add(new THREE.AmbientLight(0xddeeff, 0.5));
+    const key = new THREE.DirectionalLight(0xfff4e0, 2.0); key.position.set(0, 4, 5); es.add(key);
+    const fill = new THREE.DirectionalLight(0xc0d8ff, 0.7); fill.position.set(0, 1, 3); es.add(fill);
+    const rim = new THREE.DirectionalLight(0xffffff, 0.5); rim.position.set(0, 2, -5); es.add(rim);
+    const w1 = new THREE.Mesh(new THREE.PlaneGeometry(6, 4), new THREE.MeshBasicMaterial({ color: 0xffffff }));
+    w1.position.set(0, 2, 8); es.add(w1);
+    const w2 = new THREE.Mesh(new THREE.PlaneGeometry(2, 1.5), new THREE.MeshBasicMaterial({ color: 0xaabbcc }));
+    w2.position.set(0, 0.5, 6); w2.rotation.y = 0; es.add(w2);
+    this.scene.environment = pmrem.fromScene(es, 0, 0.1, 100).texture;
+    pmrem.dispose();
+  }
+
+  _cleanupEnvCustom() {
+    if (this._envSphere) { this.scene.remove(this._envSphere); this._envSphere.geometry.dispose(); this._envSphere.material.map?.dispose(); this._envSphere.material.dispose(); this._envSphere = null; }
+    if (this._envCubeRT) { this._envCubeRT.dispose(); this._envCubeRT = null; }
+    this._envCubeCamera = null;
+    if (this._envStream) { this._envStream.getTracks().forEach(t => t.stop()); this._envStream = null; }
+    if (this._envVideoEl) { this._envVideoEl.pause(); this._envVideoEl.srcObject = null; this._envVideoEl = null; }
+    // Clear per-material envMap overrides on all eye materials
+    for (const m of [...this.corneaMaterials, ...this.irisMaterials, ...this.scleraMaterials]) { m.envMap = null; m.needsUpdate = true; }
+  }
+
+  setEnvDefault() {
+    this._cleanupEnvCustom();
+    this._envMode = 'default';
+    // Reset all eye materials to use scene environment
+    for (const m of [...this.corneaMaterials, ...this.irisMaterials, ...this.scleraMaterials]) { m.envMap = null; m.needsUpdate = true; }
+    this._setupEnv();
+  }
+
+  // Apply envMap to all eye materials (cornea + iris + sclera) but NOT lids
+  _setEyeEnvMap(envMap) {
+    for (const m of [...this.corneaMaterials, ...this.irisMaterials, ...this.scleraMaterials]) {
+      m.envMap = envMap;
+      m.needsUpdate = true;
+    }
+  }
+
+  setEnvImage(texture) {
+    this._cleanupEnvCustom();
+    this._envMode = 'image';
+    // Flip the image horizontally via canvas for correct mirror reflection
+    const src = texture.image;
+    const c = document.createElement('canvas');
+    c.width = src.width; c.height = src.height;
+    const ctx = c.getContext('2d');
+    ctx.translate(c.width, 0);
+    ctx.scale(-1, 1);
+    ctx.drawImage(src, 0, 0);
+    const flipped = new THREE.CanvasTexture(c);
+    flipped.mapping = THREE.EquirectangularReflectionMapping;
+    flipped.colorSpace = THREE.SRGBColorSpace;
+    const pmrem = new THREE.PMREMGenerator(this.renderer);
+    const envTex = pmrem.fromEquirectangular(flipped).texture;
+    pmrem.dispose();
+    texture.dispose();
+    // Apply to cornea only — not scene.environment
+    this._setEyeEnvMap(envTex);
+  }
+
+  async setEnvVideo(stream) {
+    this._cleanupEnvCustom();
+    this._envMode = 'video';
+    this._envStream = stream;
+    const video = document.createElement('video');
+    video.srcObject = stream;
+    video.muted = true;
+    video.playsInline = true;
+    await video.play();
+    this._envVideoEl = video;
+    const vt = new THREE.VideoTexture(video);
+    vt.colorSpace = THREE.SRGBColorSpace;
+    const geo = new THREE.SphereGeometry(50, 32, 16);
+    const mat = new THREE.MeshBasicMaterial({ map: vt, side: THREE.BackSide });
+    this._envSphere = new THREE.Mesh(geo, mat);
+    this._envSphere.scale.x = -1;
+    this.scene.add(this._envSphere);
+    this._envSphere.visible = false;
+    const size = 256;
+    this._envCubeRT = new THREE.WebGLCubeRenderTarget(size);
+    this._envCubeCamera = new THREE.CubeCamera(0.1, 100, this._envCubeRT);
+    // Apply to cornea only — not scene.environment
+    this._setEyeEnvMap(this._envCubeRT.texture);
+  }
+
+  setReflectionIntensity(v) {
+    this._reflectionIntensity = v;
+    // Cornea uses its own envMapIntensity base (corneaEnv slider)
+    const base = this._corneaEnvBase || 2.5;
+    for (const m of this.corneaMaterials) m.envMapIntensity = base * v;
+    // Iris + sclera get direct intensity
+    for (const m of this.irisMaterials) m.envMapIntensity = v;
+    for (const m of this.scleraMaterials) m.envMapIntensity = v;
+  }
+
+  updateEnvVideo() {
+    if (this._envMode !== 'video' || !this._envCubeCamera) return;
+    this._envFrameCount++;
+    if (this._envFrameCount % 4 !== 0) return;
+    this._envSphere.visible = true;
+    this._envCubeCamera.update(this.renderer, this.scene);
+    this._envSphere.visible = false;
+  }
+
+  _setupLights() {
+    this.scene.add(new THREE.AmbientLight(0xffffff, 0.6));
+    this.keyLight = new THREE.DirectionalLight(0xfff8f0, 2.5);
+    this.keyLight.position.set(2, 3, 4);
+    this.scene.add(this.keyLight);
+    const fill = new THREE.DirectionalLight(0xd0e0ff, 1.0);
+    fill.position.set(-3, 1, 2);
+    this.scene.add(fill);
+    const back = new THREE.DirectionalLight(0xffffff, 0.5);
+    back.position.set(0, 1, -3);
+    this.scene.add(back);
+  }
+
+  async loadModel(url) {
+    const loader = new GLTFLoader();
+    const texLoader = new THREE.TextureLoader();
+
+    // Load external textures
+    const loadTex = (path, isSRGB, flipY = false) => {
+      const t = texLoader.load(
+        path,
+        (tex) => console.log(`[TEX] ✅ Loaded "${path}" ${tex.image.width}x${tex.image.height} flipY=${flipY}`),
+        undefined,
+        (err) => console.error(`[TEX] ❌ FAILED "${path}"`, err)
+      );
+      if (isSRGB) t.colorSpace = THREE.SRGBColorSpace;
+      t.flipY = flipY;
+      return t;
+    };
+
+    // Both textures: flipY=false (glTF convention — GLTFLoader UVs expect top-left origin)
+    const irisColorTex = loadTex('TinyEye_Iris_4096_basecolor.png', true, false);
+    const scleraColorTex = loadTex('TinyEye_Sclera_4096_basecolor.png', true, false);
+    const scleraNormalTex = loadTex('TinyEye_Sclera_4096_normal.png', false, false);
+    const scleraRoughTex = loadTex('TinyEye_Sclera_4096_roughness.png', false, false);
+
+    const gltf = await loader.loadAsync(url);
+    const model = gltf.scene;
+
+    // GLTFLoader r170 remaps UVs and re-indexes accessors internally.
+    // getDependency('accessor', 2) does NOT return raw GLB accessor 2.
+    // Parse the GLB binary directly to extract iris TEXCOORD_0.
+    const glbResponse = await fetch(url);
+    const glbBuffer = await glbResponse.arrayBuffer();
+    const glbView = new DataView(glbBuffer);
+    // GLB header: magic(4) + version(4) + length(4) = 12 bytes
+    // JSON chunk: chunkLength(4) + chunkType(4) + data
+    const jsonChunkLen = glbView.getUint32(12, true);
+    const jsonStr = new TextDecoder().decode(new Uint8Array(glbBuffer, 20, jsonChunkLen));
+    const glbJson = JSON.parse(jsonStr);
+    // BIN chunk starts after JSON chunk
+    const binChunkOffset = 20 + jsonChunkLen;
+    // binChunkLen(4) + binChunkType(4) + data
+    const binDataOffset = binChunkOffset + 8;
+
+    // Helper: parse UV from raw GLB binary by accessor index
+    const parseUv = (accessorIdx, label) => {
+      const a = glbJson.accessors[accessorIdx];
+      const b = glbJson.bufferViews[a.bufferView];
+      const off = (b.byteOffset || 0) + (a.byteOffset || 0);
+      const st = b.byteStride || 8;
+      const arr = new Float32Array(a.count * 2);
+      for (let i = 0; i < a.count; i++) {
+        const p = binDataOffset + off + i * st;
+        arr[i * 2] = glbView.getFloat32(p, true);
+        arr[i * 2 + 1] = glbView.getFloat32(p + 4, true);
+      }
+      const buf = new THREE.BufferAttribute(arr, 2);
+      console.log(`[UV] ${label}: count=${a.count}, first=(${buf.getX(0).toFixed(3)},${buf.getY(0).toFixed(3)})`);
+      return buf;
+    };
+
+    // Dump GLB mesh/primitive structure to find correct UV accessors
+    glbJson.meshes.forEach((mesh, mi) => {
+      console.log(`[GLB] Mesh ${mi}: "${mesh.name}"`);
+      mesh.primitives.forEach((prim, pi) => {
+        const attrs = Object.entries(prim.attributes).map(([k,v]) => `${k}=${v}`).join(', ');
+        const matIdx = prim.material;
+        const matName = matIdx !== undefined ? glbJson.materials[matIdx]?.name : '?';
+        console.log(`  Prim ${pi}: material="${matName}" | ${attrs}`);
+      });
+    });
+
+    // Find iris and sclera TEXCOORD accessors dynamically from GLB
+    let irisTexcoordIdx = null;
+    let scleraTexcoordIdx = null;
+    const irisTexcoords = {};
+    const scleraTexcoords = {};
+
+    glbJson.meshes.forEach(mesh => {
+      mesh.primitives.forEach(prim => {
+        const matIdx = prim.material;
+        const matName = matIdx !== undefined ? glbJson.materials[matIdx]?.name?.toLowerCase() : '';
+        // Collect all TEXCOORD channels
+        Object.entries(prim.attributes).forEach(([key, accIdx]) => {
+          if (key.startsWith('TEXCOORD_')) {
+            if (matName.includes('iris')) {
+              irisTexcoords[key] = accIdx;
+            } else if (matName.includes('sclera')) {
+              scleraTexcoords[key] = accIdx;
+            }
+          }
+        });
+      });
+    });
+
+    console.log('[GLB] Iris TEXCOORD channels:', JSON.stringify(irisTexcoords));
+    console.log('[GLB] Sclera TEXCOORD channels:', JSON.stringify(scleraTexcoords));
+
+    // Parse all iris TEXCOORD channels and log UV ranges to find the bake UV
+    const irisUvCandidates = {};
+    Object.entries(irisTexcoords).forEach(([key, accIdx]) => {
+      const uv = parseUv(accIdx, `iris ${key} (accessor ${accIdx})`);
+      // Compute UV bounding box
+      let minU = Infinity, maxU = -Infinity, minV = Infinity, maxV = -Infinity;
+      for (let i = 0; i < uv.count; i++) {
+        const u = uv.getX(i), v = uv.getY(i);
+        if (u < minU) minU = u; if (u > maxU) maxU = u;
+        if (v < minV) minV = v; if (v > maxV) maxV = v;
+      }
+      console.log(`[UV] iris ${key} (acc ${accIdx}): range U=[${minU.toFixed(3)},${maxU.toFixed(3)}] V=[${minV.toFixed(3)},${maxV.toFixed(3)}]`);
+      irisUvCandidates[key] = { uv, accIdx, minU, maxU, minV, maxV };
+    });
+
+    // Material texCoord will be read below to pick the correct channel
+    // For now, keep all candidates parsed
+
+    // Read the texCoord index from glTF material definition
+    // This tells us which TEXCOORD_N was used for baking in Blender
+    let irisMatTexCoord = 0;
+    let scleraMatTexCoord = 0;
+    glbJson.meshes.forEach(mesh => {
+      mesh.primitives.forEach(prim => {
+        const matIdx = prim.material;
+        if (matIdx === undefined) return;
+        const mat = glbJson.materials[matIdx];
+        const matName = mat?.name?.toLowerCase() || '';
+        const baseColorTex = mat?.pbrMetallicRoughness?.baseColorTexture;
+        const tc = baseColorTex?.texCoord ?? 0;
+        if (matName.includes('iris')) {
+          irisMatTexCoord = tc;
+          console.log(`[GLB] Iris material baseColorTexture.texCoord = ${tc}`);
+        } else if (matName.includes('sclera')) {
+          scleraMatTexCoord = tc;
+          console.log(`[GLB] Sclera material baseColorTexture.texCoord = ${tc}`);
+        }
+        // Log full material texture info
+        console.log(`[GLB] Material "${mat?.name}": baseColor texCoord=${tc}, normalTex texCoord=${mat?.normalTexture?.texCoord ?? 0}`);
+      });
+    });
+
+    // Use the material-specified TEXCOORD channel
+    const scleraTexcoordKey = `TEXCOORD_${scleraMatTexCoord}`;
+    const scleraAccIdx = scleraTexcoords[scleraTexcoordKey] ?? scleraTexcoords['TEXCOORD_0'] ?? 38;
+    console.log(`[UV] Using sclera ${scleraTexcoordKey} (accessor ${scleraAccIdx}) — material says texCoord=${scleraMatTexCoord}`);
+    const scleraUv = parseUv(scleraAccIdx, `sclera ${scleraTexcoordKey} (accessor ${scleraAccIdx})`);
+
+    // TEXCOORD_3 is the bake UV that perfectly fills [0,1] in both U and V
+    // TEXCOORD_0 (material default) is offset in V (0.101→1.005) — causes misaligned pupil
+    const irisAccIdx = irisTexcoords['TEXCOORD_3'];
+    console.log(`[UV] Using iris TEXCOORD_3 (accessor ${irisAccIdx}) — bake UV, flipY=false`);
+    const irisUv = parseUv(irisAccIdx, `iris TEXCOORD_3 (accessor ${irisAccIdx})`);
+
+    this._textures = { irisColorTex, scleraColorTex, scleraNormalTex, scleraRoughTex };
+    this._irisUv = irisUv;
+    this._scleraUv = scleraUv;
+
+    model.traverse(child => {
+      if (!child.isMesh) return;
+      const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+      const matName = mat?.name || '';
+      const isIris = matName.toLowerCase().includes('iris');
+
+      // Remove vertex colors on all meshes
+      if (child.geometry.hasAttribute('color')) child.geometry.deleteAttribute('color');
+      if (child.geometry.hasAttribute('color_1')) child.geometry.deleteAttribute('color_1');
+      if (child.geometry.hasAttribute('color_2')) child.geometry.deleteAttribute('color_2');
+
+      // Log raw mesh bounding box
+      child.geometry.computeBoundingBox();
+      const bb = child.geometry.boundingBox;
+      const meshSize = bb.getSize(new THREE.Vector3());
+      console.log(`[MESH] ${isIris ? 'IRIS' : 'SCLERA'} "${child.name}": size=(${meshSize.x.toFixed(4)},${meshSize.y.toFixed(4)},${meshSize.z.toFixed(4)}), min=(${bb.min.x.toFixed(4)},${bb.min.y.toFixed(4)},${bb.min.z.toFixed(4)}), max=(${bb.max.x.toFixed(4)},${bb.max.y.toFixed(4)},${bb.max.z.toFixed(4)})`);
+
+      if (isIris) {
+        child.geometry.setAttribute('uv', irisUv);
+        // Subdivide for smoother silhouette
+        child.geometry = _trySubdivide(child.geometry, 'iris');
+        child.geometry.computeVertexNormals();
+        const irisMat = new THREE.MeshBasicMaterial({
+          map: irisColorTex,
+          side: THREE.FrontSide,
+          vertexColors: false,
+          toneMapped: false,
+          depthTest: false,   // stencil handles occlusion, depth blocks iris behind lids
+          depthWrite: false,
+          stencilWrite: true,
+          stencilFunc: THREE.EqualStencilFunc,
+          stencilRef: 2,      // only render where ghost wrote 2
+          stencilFuncMask: 0xff,
+          stencilFail: THREE.KeepStencilOp,
+          stencilZFail: THREE.KeepStencilOp,
+          stencilZPass: THREE.KeepStencilOp,
+        });
+        child.renderOrder = 2;  // after sclera (1), before lids (3)
+        irisMat.name = 'iris';
+        child.material = irisMat;
+        this.irisMaterials.push(irisMat);
+        this.irisMeshes.push(child);
+      } else {
+        child.geometry.setAttribute('uv', scleraUv);
+        // Subdivide for smoother silhouette
+        child.geometry = _trySubdivide(child.geometry, 'sclera');
+        child.geometry.computeVertexNormals();
+        console.log(`[SCLERA] UV count=${child.geometry.getAttribute('uv').count}`);
+        const sclMat = new THREE.MeshBasicMaterial({
+          map: scleraColorTex,
+          stencilWrite: true,
+          stencilFunc: THREE.NotEqualStencilFunc,
+          stencilRef: 2,
+          stencilFuncMask: 0xff,
+          stencilFail: THREE.KeepStencilOp,
+          stencilZFail: THREE.KeepStencilOp,
+          stencilZPass: THREE.KeepStencilOp,
+        });
+        child.renderOrder = 1;  // after ghost (0), before iris (2)
+        sclMat.name = 'sclera';
+        child.material = sclMat;
+        // child.receiveShadow = true;  // disabled — shadow maps off
+        this.scleraMaterials.push(sclMat);
+      }
+    });
+
+    // Scale based on SCLERA X/Y radius so the eyeball fills the shells
+    const rawBox = new THREE.Box3().setFromObject(model);
+    this._eyeCenter = rawBox.getCenter(new THREE.Vector3());
+    // Use geometry bounding box for _eyeScale (determines model display size).
+    // This ignores GLB hierarchy transforms intentionally — the model looks correct at this scale.
+    // Cornea/lid sizes are computed in _createEye using setFromObject (which sees hierarchy transforms).
+    let scleraRawRadius = 0;
+    model.traverse(child => {
+      if (!child.isMesh) return;
+      const mat = Array.isArray(child.material) ? child.material[0] : child.material;
+      if (!mat?.name?.toLowerCase()?.includes('iris')) {
+        child.geometry.computeBoundingBox();
+        const sz = child.geometry.boundingBox.getSize(new THREE.Vector3());
+        scleraRawRadius = Math.max(sz.x, sz.y) / 2;
+      }
+    });
+    this._eyeScale = (R * 1.15) / scleraRawRadius;
+    this._scleraR = scleraRawRadius * this._eyeScale; // = R * 1.15
+    console.log(`[EYE] scleraGeomRadius=${scleraRawRadius.toFixed(4)}, scale=${this._eyeScale.toFixed(2)}`);
+
+    // Use original for left, clone for right
+    this.left = this._createEye(model, false);
+    this.right = this._createEye(model, true);
+    this.eyeGroup.add(this.left.group);
+    this.eyeGroup.add(this.right.group);
+
+    // Log morph targets
+    if (this.left.meshes.length > 0 && this.left.meshes[0].morphTargetDictionary) {
+      console.log('Morph targets available:', Object.keys(this.left.meshes[0].morphTargetDictionary));
+    }
+
+    return true;
+  }
+
+  _createEye(sourceModel, doClone = true) {
+    const group = new THREE.Group();
+    const pivot = new THREE.Group();
+    pivot.name = 'pivot';
+    const d = IS_MOBILE ? 48 : 128;
+
+    const eye = doClone ? sourceModel.clone() : sourceModel;
+    if (doClone) {
+      // Re-apply materials + UV on clone (clone UV to avoid shared reference)
+      const { irisColorTex, scleraColorTex } = this._textures;
+      eye.traverse(child => {
+        if (!child.isMesh || child.name === 'irisGhost') return;
+        child.geometry = child.geometry.clone();
+        if (child.geometry.hasAttribute('color')) child.geometry.deleteAttribute('color');
+        if (child.geometry.hasAttribute('color_1')) child.geometry.deleteAttribute('color_1');
+        if (child.geometry.hasAttribute('color_2')) child.geometry.deleteAttribute('color_2');
+        const isIris = child.material?.name === 'iris';
+        if (isIris) {
+          child.geometry.setAttribute('uv', this._irisUv.clone());
+          const irisMat = new THREE.MeshBasicMaterial({
+            map: irisColorTex, side: THREE.FrontSide, vertexColors: false,
+            toneMapped: false,
+            depthTest: false, depthWrite: false,
+            stencilWrite: true,
+            stencilFunc: THREE.EqualStencilFunc,
+            stencilRef: 2, stencilFuncMask: 0xff,
+            stencilFail: THREE.KeepStencilOp,
+            stencilZFail: THREE.KeepStencilOp,
+            stencilZPass: THREE.KeepStencilOp,
+          });
+          child.renderOrder = 2;  // after sclera (1), before lids (3)
+          irisMat.name = 'iris';
+          child.material = irisMat;
+          this.irisMaterials.push(irisMat);
+          this.irisMeshes.push(child);
+        } else {
+          child.geometry.setAttribute('uv', this._scleraUv.clone());
+          const sclMat = new THREE.MeshBasicMaterial({
+            map: scleraColorTex,
+            stencilWrite: true,
+            stencilFunc: THREE.NotEqualStencilFunc,
+            stencilRef: 2, stencilFuncMask: 0xff,
+            stencilFail: THREE.KeepStencilOp,
+            stencilZFail: THREE.KeepStencilOp,
+            stencilZPass: THREE.KeepStencilOp,
+          });
+          child.renderOrder = 1;  // after ghost (0), before iris (2)
+          sclMat.name = 'sclera';
+          child.material = sclMat;
+          this.scleraMaterials.push(sclMat);
+        }
+      });
+    }
+
+    // Remove any stale ghosts carried over from clone
+    const staleGhosts = [];
+    eye.traverse(child => { if (child.name === 'irisGhost') staleGhosts.push(child); });
+    staleGhosts.forEach(g => g.parent?.remove(g));
+
+    // Create iris ghost for BOTH eyes (after clone setup, before scaling)
+    const ghostsToAdd = [];
+    eye.traverse(child => {
+      if (!child.isMesh || child.name === 'irisGhost') return;
+      if (child.material?.name !== 'iris') return;
+      const ghostMat = new THREE.MeshBasicMaterial({
+        colorWrite: false,
+        depthTest: false, depthWrite: false,
+        stencilWrite: true,
+        stencilFunc: THREE.AlwaysStencilFunc,
+        stencilRef: 2, stencilFuncMask: 0xff,
+        stencilFail: THREE.KeepStencilOp,
+        stencilZFail: THREE.KeepStencilOp,
+        stencilZPass: THREE.ReplaceStencilOp,
+      });
+      const irisGhost = new THREE.Mesh(child.geometry, ghostMat);
+      irisGhost.morphTargetDictionary = child.morphTargetDictionary;
+      irisGhost.morphTargetInfluences = child.morphTargetInfluences;
+      irisGhost.position.copy(child.position);
+      irisGhost.rotation.copy(child.rotation);
+      irisGhost.scale.copy(child.scale);
+      irisGhost.renderOrder = 1;
+      irisGhost.name = 'irisGhost';
+      ghostsToAdd.push({ ghost: irisGhost, parent: child.parent });
+    });
+    ghostsToAdd.forEach(({ ghost, parent }) => parent.add(ghost));
+
+    // Apply pre-computed scale (same for both eyes)
+    eye.scale.setScalar(this._eyeScale);
+    // Center based on raw model center, scaled
+    const center = this._eyeCenter.clone().multiplyScalar(this._eyeScale);
+    eye.position.set(-center.x, -center.y, -center.z);
+
+    // Model already faces +Z (confirmed by vertex positions), no rotation needed
+
+    eye.name = 'eyeModel';
+    pivot.add(eye);
+
+    // Measure sclera with setFromObject (accounts for GLB hierarchy transforms)
+    eye.updateMatrixWorld(true);
+    let actualScleraR = this._scleraR;  // fallback = R * 1.15
+    const scleraCenter = new THREE.Vector3();
+    eye.traverse(c => {
+      if (c.isMesh && c.material?.name === 'sclera') {
+        const wb = new THREE.Box3().setFromObject(c);
+        const ws = wb.getSize(new THREE.Vector3());
+        actualScleraR = Math.max(ws.x, ws.y) / 2;  // front-face radius
+        wb.getCenter(scleraCenter);
+      }
+    });
+    console.log(`[SHELL] actualScleraR=${actualScleraR.toFixed(4)}, center=(${scleraCenter.x.toFixed(4)},${scleraCenter.y.toFixed(4)},${scleraCenter.z.toFixed(4)})`);
+
+    // Limbus ring — dark ring at iris/sclera boundary
+    const limbusInner = actualScleraR * 0.42;  // just inside iris edge
+    const limbusOuter = actualScleraR * 0.52;  // just outside iris edge
+    const limbusGeo = new THREE.RingGeometry(limbusInner, limbusOuter, 64, 1);
+    const limbusMat = new THREE.MeshBasicMaterial({
+      color: 0x1a1008,
+      transparent: true,
+      opacity: 0.35,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.DoubleSide,
+      blending: THREE.NormalBlending,
+    });
+    const limbusRing = new THREE.Mesh(limbusGeo, limbusMat);
+    limbusRing.name = 'limbusRing';
+    limbusRing.position.copy(scleraCenter);
+    limbusRing.position.z += actualScleraR * 0.88;  // on the front surface
+    limbusRing.renderOrder = 2.1;  // just after iris
+    pivot.add(limbusRing);
+    if (!this._limbusMats) this._limbusMats = [];
+    this._limbusMats.push(limbusMat);
+
+    // Cornea shell — transmission glass (physically correct)
+    const corneaMat = new THREE.MeshPhysicalMaterial({
+      color: 0xffffff,
+      roughness: 0.0,
+      metalness: 0.0,
+      transmission: 1.0,
+      thickness: 0.05,
+      ior: 1.376,
+      clearcoat: 1.0,
+      clearcoatRoughness: 0.0,
+      envMapIntensity: 2.5,
+      reflectivity: 0.5,
+      transparent: true,
+      depthWrite: false, depthTest: true,
+      side: THREE.FrontSide,
+    });
+    const corneaGeo = new THREE.SphereGeometry(actualScleraR * 1.002, d, d);
+    const cornea = new THREE.Mesh(corneaGeo, corneaMat);
+    cornea.name = 'cornea';
+    cornea.position.copy(scleraCenter); // world-space center from setFromObject
+    cornea.renderOrder = 11;
+    pivot.add(cornea);  // in pivot — cornea rotates with the eyeball
+    this.corneaMaterials.push(corneaMat);
+    this.corneaMeshes.push(cornea);
+
+    // Catch light — small bright disc on cornea surface, tracks key light
+    const clGeo = new THREE.CircleGeometry(actualScleraR * 0.08, 16);
+    const clMat = new THREE.MeshBasicMaterial({
+      color: 0xffffff,
+      transparent: true,
+      opacity: 0.7,
+      depthWrite: false,
+      depthTest: true,
+      side: THREE.FrontSide,
+    });
+    const catchLight = new THREE.Mesh(clGeo, clMat);
+    catchLight.name = 'catchLight';
+    catchLight.renderOrder = 12;  // on top of cornea
+    // Position on the cornea surface (will be updated in updateLighting)
+    catchLight.position.copy(scleraCenter);
+    catchLight.position.z += actualScleraR * 1.003;
+    catchLight.position.y += actualScleraR * 0.25;
+    catchLight.position.x += actualScleraR * 0.15;
+    group.add(catchLight);  // in group (not pivot) — stays fixed relative to viewer
+    if (!this._catchLightMeshes) this._catchLightMeshes = [];
+    this._catchLightMeshes.push(catchLight);
+    if (!this._catchLightMats) this._catchLightMats = [];
+    this._catchLightMats.push(clMat);
+    // Store sclera center & radius for catch light positioning
+    catchLight.userData.scleraCenter = scleraCenter.clone();
+    catchLight.userData.scleraR = actualScleraR;
+
+    group.add(pivot);
+
+    // Collect morph target meshes
+    const meshes = [];
+    eye.traverse(c => { if (c.isMesh && c.morphTargetInfluences && c.name !== 'irisGhost') meshes.push(c); });
+
+    // Procedural almond-shaped eyelids
+    const lidR = actualScleraR * 1.05;
+    const segsU = IS_MOBILE ? 32 : 64;
+    const segsV = 12;
+    const lidParams = { cornerSharp: 1.2, outerAngle: doClone ? -0.08 : 0.08, creaseDepth: 1.0 };
+
+    // Skin bump texture (generated once, reused)
+    if (!this._skinBumpTex) this._skinBumpTex = generateSkinBumpTexture();
+
+    // Materials
+    const skinMat = new THREE.MeshPhysicalMaterial({
+      color: 0xc4956a, roughness: 0.65, metalness: 0.0,
+      sheen: 1.0, sheenColor: new THREE.Color(0xeeddcc), sheenRoughness: 0.4,
+      clearcoat: 0.05, clearcoatRoughness: 0.6,
+      envMapIntensity: 0.4, vertexColors: true,
+      bumpMap: this._skinBumpTex,
+      bumpScale: 0.003,
+      side: THREE.FrontSide, depthWrite: true, depthTest: true,
+    });
+    const innerLidMat = new THREE.MeshPhysicalMaterial({
+      color: 0xd4857a, roughness: 0.5, metalness: 0.0,
+      sheen: 0.5, sheenColor: new THREE.Color(0xffccbb),
+      side: THREE.BackSide, depthWrite: true, depthTest: true,
+    });
+    const edgeMat = new THREE.MeshPhysicalMaterial({
+      color: 0xbb7066, roughness: 0.4, metalness: 0.0,
+      side: THREE.DoubleSide, depthWrite: true, depthTest: true,
+    });
+    const shadowMat = new THREE.MeshBasicMaterial({
+      color: 0x000000, transparent: true, opacity: 0.25,
+      depthWrite: false, side: THREE.FrontSide,
+      polygonOffset: true, polygonOffsetFactor: -1, polygonOffsetUnits: -1,
+    });
+
+    const lidWrap = new THREE.Group();
+    lidWrap.name = 'lidWrap';
+    lidWrap.position.copy(scleraCenter);
+
+    // Store materials for later access
+    this._lidSkinMats = this._lidSkinMats || [];
+    this._lidSkinUpperMats = this._lidSkinUpperMats || [];
+    this._lidSkinLowerMats = this._lidSkinLowerMats || [];
+    this._lidInnerMats = this._lidInnerMats || [];
+    this._lidEdgeMats = this._lidEdgeMats || [];
+    this._lidShadowMats = this._lidShadowMats || [];
+    this._lidParams = lidParams;
+
+    for (const isUpper of [true, false]) {
+      const grp = new THREE.Group();
+      grp.name = isUpper ? 'upperLid' : 'lowerLid';
+
+      // Outer skin surface
+      const outerGeo = createAlmondLidGeometry(lidR, segsU, segsV, isUpper, lidParams);
+      const outerMat = skinMat.clone();
+      outerMat.vertexColors = true;
+      const outerMesh = new THREE.Mesh(outerGeo, outerMat);
+      outerMesh.name = 'outer';
+      outerMesh.renderOrder = 3;
+      // outerMesh.castShadow = true;  // disabled — shadow maps off
+      grp.add(outerMesh);
+      this._lidSkinMats.push(outerMat);
+      if (isUpper) this._lidSkinUpperMats.push(outerMat);
+      else this._lidSkinLowerMats.push(outerMat);
+
+      // Inner conjunctival surface
+      const innerGeo = createAlmondLidGeometry(lidR * 0.985, segsU, segsV, isUpper, lidParams);
+      const iMat = innerLidMat.clone();
+      const innerMesh = new THREE.Mesh(innerGeo, iMat);
+      innerMesh.name = 'inner';
+      innerMesh.renderOrder = 3;
+      grp.add(innerMesh);
+      this._lidInnerMats.push(iMat);
+
+      // Edge strip (waterline thickness)
+      const eGeo = createLidEdgeStrip(outerGeo, innerGeo, segsU);
+      const eMat = edgeMat.clone();
+      const edgeMesh = new THREE.Mesh(eGeo, eMat);
+      edgeMesh.name = 'edge';
+      edgeMesh.renderOrder = 3;
+      grp.add(edgeMesh);
+      this._lidEdgeMats.push(eMat);
+
+      // Tear film — wet specular line along lid waterline
+      const tearGeo = createAlmondLidGeometry(lidR * 0.993, segsU, 2, isUpper, lidParams);
+      const tearMat = new THREE.MeshPhysicalMaterial({
+        color: 0xffffff,
+        transparent: true,
+        opacity: 0.12,
+        roughness: 0.0,
+        metalness: 0.1,
+        clearcoat: 1.0,
+        clearcoatRoughness: 0.0,
+        envMapIntensity: 3.0,
+        side: THREE.FrontSide,
+        depthWrite: false,
+        depthTest: true,
+      });
+      const tearMesh = new THREE.Mesh(tearGeo, tearMat);
+      tearMesh.name = 'tearFilm';
+      tearMesh.renderOrder = 3.1;  // just after lids
+      // Scale it to a thin strip at the lid edge
+      tearMesh.scale.set(1, isUpper ? 0.15 : 0.2, 1);
+      grp.add(tearMesh);
+      if (!this._tearFilmMats) this._tearFilmMats = [];
+      this._tearFilmMats.push(tearMat);
+
+      // Lashes — procedural triangle strips along lid edge
+      const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 50 : 30);
+      const lashMat = new THREE.MeshBasicMaterial({
+        color: 0x1a0e08,
+        side: THREE.DoubleSide,
+        depthWrite: true,
+        depthTest: true,
+      });
+      const lashMesh = new THREE.Mesh(lashGeo, lashMat);
+      lashMesh.name = 'lashes';
+      lashMesh.renderOrder = 3.5;
+      grp.add(lashMesh);
+
+      // Shadow strip on sclera (upper lid only casts meaningful shadow)
+      if (isUpper) {
+        const shGeo = createShadowStripGeometry(lidR * 0.998, segsU, isUpper, lidParams);
+        const shMat = shadowMat.clone();
+        const shMesh = new THREE.Mesh(shGeo, shMat);
+        shMesh.name = 'shadow';
+        shMesh.renderOrder = 2.5;
+        grp.add(shMesh);
+        this._lidShadowMats.push(shMat);
+      }
+
+      lidWrap.add(grp);
+    }
+
+    group.add(lidWrap);
+
+    // Back cap — dark backdrop behind iris, smaller radius to avoid clipping thick lids
+    const backCapMat = new THREE.MeshBasicMaterial({
+      color: 0x0a0808, side: THREE.BackSide,
+      depthWrite: true, depthTest: true,
+    });
+    const backCap = new THREE.Mesh(
+      new THREE.SphereGeometry(actualScleraR * 0.99, d / 2, d / 2, 0, Math.PI * 2, Math.PI * 0.25, Math.PI * 0.5),
+      backCapMat
+    );
+    backCap.name = 'backCap';
+    backCap.position.copy(scleraCenter);
+    backCap.renderOrder = 4;
+    group.add(backCap);
+
+    // Procedural eyebrow — tapered tube above the eye
+    const bR = actualScleraR;
+    const browCurve = new THREE.QuadraticBezierCurve3(
+      new THREE.Vector3(-bR * 0.85, bR * 1.2, bR * 0.35),
+      new THREE.Vector3(0, bR * 1.4, bR * 0.45),
+      new THREE.Vector3(bR * 0.7, bR * 1.15, bR * 0.25),
+    );
+    const browGeo = new THREE.TubeGeometry(browCurve, 24, bR * 0.04, 8, false);
+    // Taper: thinner at the ends
+    const browPos = browGeo.getAttribute('position');
+    const browPts = browCurve.getPoints(24);
+    const totalLen = browCurve.getLength();
+    for (let i = 0; i < browPos.count; i++) {
+      const v = new THREE.Vector3(browPos.getX(i), browPos.getY(i), browPos.getZ(i));
+      // Find closest curve point to estimate t parameter
+      let minDist = Infinity, bestT = 0;
+      for (let j = 0; j <= 24; j++) {
+        const d2 = v.distanceToSquared(browPts[j]);
+        if (d2 < minDist) { minDist = d2; bestT = j / 24; }
+      }
+      // Taper: thick at center (t=0.4), thin at ends
+      const taper = 0.4 + 0.6 * Math.sin(bestT * Math.PI);
+      const center = browCurve.getPointAt(bestT);
+      const dir = v.clone().sub(center);
+      dir.multiplyScalar(taper);
+      const final = center.clone().add(dir);
+      browPos.setXYZ(i, final.x, final.y, final.z);
+    }
+    browPos.needsUpdate = true;
+    browGeo.computeVertexNormals();
+    const browMat = new THREE.MeshStandardMaterial({
+      color: 0x0a0808, roughness: 0.9, metalness: 0.0,
+    });
+    const brow = new THREE.Mesh(browGeo, browMat);
+    brow.name = 'eyebrow';
+    // lidWrap is already at scleraCenter, don't double-offset
+    brow.renderOrder = 5;
+    lidWrap.add(brow);
+
+    return { group, pivot, eye, meshes, lidWrap };
+  }
+
+  setMorphTarget(name, value) {
+    const glbName = MORPH_MAP[name];
+    if (!glbName) return;
+    for (const eye of [this.left, this.right]) {
+      if (!eye) continue;
+      for (const mesh of eye.meshes) {
+        const idx = mesh.morphTargetDictionary?.[glbName];
+        if (idx !== undefined) mesh.morphTargetInfluences[idx] = value;
+      }
+    }
+    // Cornea bulge — push front vertices outward (localized over iris area)
+    if (name === 'corneaBulge') {
+      for (const c of this.corneaMeshes) {
+        const geo = c.geometry;
+        const pos = geo.getAttribute('position');
+        if (!c.userData.basePositions) {
+          c.userData.basePositions = pos.array.slice();
+        }
+        const base = c.userData.basePositions;
+        const r = geo.parameters?.radius || 0.65;
+        for (let i = 0; i < pos.count; i++) {
+          const bx = base[i * 3], by = base[i * 3 + 1], bz = base[i * 3 + 2];
+          // Only push vertices facing forward (z > 0) with falloff from center
+          const nz = bz / r; // normalized z: 1 at front pole, -1 at back
+          if (nz > 0) {
+            const dist2 = (bx * bx + by * by) / (r * r); // lateral distance from axis
+            const falloff = Math.max(0, 1.0 - dist2 * 2.5) * nz; // strong at center, fades outward
+            const push = value * 0.06 * r * falloff;
+            const len = Math.sqrt(bx * bx + by * by + bz * bz);
+            pos.array[i * 3] = bx + (bx / len) * push;
+            pos.array[i * 3 + 1] = by + (by / len) * push;
+            pos.array[i * 3 + 2] = bz + (bz / len) * push;
+          } else {
+            pos.array[i * 3] = bx;
+            pos.array[i * 3 + 1] = by;
+            pos.array[i * 3 + 2] = bz;
+          }
+        }
+        pos.needsUpdate = true;
+        geo.computeVertexNormals();
+      }
+    }
+  }
+
+  setCorneaParam(prop, v) {
+    if (prop === 'envMapIntensity') {
+      this._corneaEnvBase = v;
+      const ri = this._reflectionIntensity || 1.0;
+      for (const m of this.corneaMaterials) m.envMapIntensity = v * ri;
+      return;
+    }
+    for (const m of this.corneaMaterials) m[prop] = v;
+  }
+  setGlobalBulge(v) {
+    this._globalBulgeFactor = 1.0 + v * 0.1;
+    this._updateCorneaScale();
+  }
+  setCorneaScale(v) {
+    this._corneaScaleFactor = v;
+    this._updateCorneaScale();
+  }
+  _updateCorneaScale() {
+    const s = this._corneaScaleFactor * this._globalBulgeFactor;
+    for (const c of this.corneaMeshes) c.scale.setScalar(s);
+  }
+  setEyeballScale(v) {
+    for (const e of [this.left, this.right]) {
+      if (!e?.eye) continue;
+      e.eye.scale.setScalar(this._eyeScale * v);
+    }
+  }
+  setSkinScale(v) {
+    for (const e of [this.left, this.right]) {
+      if (!e) continue;
+      e.lidWrap.scale.setScalar(v);
+      const bc = e.group.getObjectByName('backCap');
+      if (bc) bc.scale.setScalar(v);
+    }
+  }
+  setIrisDepth(v) { for (const m of this.irisMeshes) m.position.z = v; }
+  setIrisParallax(v) { this._irisParallaxDepth = v; }
+
+  setLid3d(enabled) {
+    for (const eye of [this.left, this.right]) {
+      if (!eye) continue;
+      for (const name of ['upperLid', 'lowerLid']) {
+        const grp = eye.lidWrap.getObjectByName(name);
+        if (!grp) continue;
+        grp.traverse(mesh => {
+          if (!mesh.isMesh) return;
+          if (!mesh.userData.stdMat) mesh.userData.stdMat = mesh.material;
+          if (enabled) {
+            mesh.material = mesh.userData.stdMat;
+          } else {
+            if (!mesh.userData.flatMat) {
+              mesh.userData.flatMat = new THREE.MeshBasicMaterial({
+                color: 0x000000, side: mesh.userData.stdMat.side,
+                depthWrite: true, depthTest: true,
+              });
+            }
+            mesh.material = mesh.userData.flatMat;
+          }
+        });
+      }
+    }
+  }
+
+  _setLidMeshColor(mesh, c) {
+    mesh.material.color.copy(c);
+    mesh.material.needsUpdate = true;
+    if (mesh.userData.stdMat) { mesh.userData.stdMat.color.copy(c); mesh.userData.stdMat.needsUpdate = true; }
+    if (mesh.userData.flatMat) { mesh.userData.flatMat.color.copy(c); mesh.userData.flatMat.needsUpdate = true; }
+  }
+  setLidSkinColor(color) {
+    const c = new THREE.Color(color);
+    for (const eye of [this.left, this.right]) {
+      if (!eye) continue;
+      const grp = eye.lidWrap?.getObjectByName('upperLid');
+      if (!grp) continue;
+      grp.traverse(mesh => {
+        if (!mesh.isMesh || mesh.name !== 'outer') return;
+        this._setLidMeshColor(mesh, c);
+      });
+    }
+  }
+  setLidLowerColor(color) {
+    const c = new THREE.Color(color);
+    for (const eye of [this.left, this.right]) {
+      if (!eye) continue;
+      const grp = eye.lidWrap?.getObjectByName('lowerLid');
+      if (!grp) continue;
+      grp.traverse(mesh => {
+        // Color BOTH outer and inner — the inner mesh (BackSide) is what's
+        // actually visible on the lower lid because the outer normals point
+        // away from the camera (face-culled)
+        if (!mesh.isMesh || (mesh.name !== 'outer' && mesh.name !== 'inner')) return;
+        this._setLidMeshColor(mesh, c);
+      });
+    }
+  }
+  setLidEdgeColor(color) {
+    const c = new THREE.Color(color);
+    if (this._lidEdgeMats) this._lidEdgeMats.forEach(m => m.color.copy(c));
+  }
+
+  setLidRoughness(v) { if (this._lidSkinMats) this._lidSkinMats.forEach(m => { m.roughness = v; }); }
+  setLidSheen(v) { if (this._lidSkinMats) this._lidSkinMats.forEach(m => { m.sheen = v; }); }
+  setLidClearcoat(v) { if (this._lidSkinMats) this._lidSkinMats.forEach(m => { m.clearcoat = v; }); }
+
+  setLidShadowOpacity(val) {
+    if (this._lidShadowMats) this._lidShadowMats.forEach(m => { m.opacity = val; });
+  }
+
+  setLidParam(key, val) {
+    if (!this._lidParams) return;
+    this._lidParams[key] = val;
+    // Regenerate lid geometries with updated params would be expensive per-frame
+    // Instead, store for next full rebuild. These params affect base geometry shape.
+    // For cornerSharp and outerAngle, we need to rebuild the base geometry.
+    this._rebuildLidGeometries();
+  }
+
+  _rebuildLidGeometries() {
+    const params = this._lidParams;
+    const segsU = IS_MOBILE ? 32 : 64;
+    const segsV = 12;
+    const eyes = [this.left, this.right];
+    for (let idx = 0; idx < eyes.length; idx++) {
+      const eye = eyes[idx];
+      if (!eye) continue;
+      // Mirror outerAngle for the right eye (idx 1) so canthi are symmetric
+      const eyeParams = { ...params };
+      if (idx === 1) eyeParams.outerAngle = -(eyeParams.outerAngle || 0);
+      for (const isUpper of [true, false]) {
+        const name = isUpper ? 'upperLid' : 'lowerLid';
+        const grp = eye.lidWrap.getObjectByName(name);
+        if (!grp) continue;
+        const outer = grp.getObjectByName('outer');
+        const inner = grp.getObjectByName('inner');
+        const shadow = grp.getObjectByName('shadow');
+        if (outer) {
+          const newGeo = createAlmondLidGeometry(outer.geometry.userData.radius, segsU, segsV, isUpper, eyeParams);
+          outer.geometry.dispose();
+          outer.geometry = newGeo;
+        }
+        if (inner) {
+          const newGeo = createAlmondLidGeometry(inner.geometry.userData.radius, segsU, segsV, isUpper, eyeParams);
+          inner.geometry.dispose();
+          inner.geometry = newGeo;
+        }
+        if (shadow) {
+          const newGeo = createShadowStripGeometry(shadow.geometry.userData.radius, segsU, isUpper, eyeParams);
+          shadow.geometry.dispose();
+          shadow.geometry = newGeo;
+        }
+        const edge = grp.getObjectByName('edge');
+        if (edge && outer && inner) {
+          const newEdge = createLidEdgeStrip(outer.geometry, inner.geometry, segsU);
+          edge.geometry.dispose();
+          edge.geometry = newEdge;
+        }
+      }
+    }
+  }
+
+  updateBrows(height, thickness, cyclops) {
+    const eyes = cyclops ? [this.left] : [this.left, this.right];
+    eyes.forEach(eye => {
+      if (!eye) return;
+      const brow = eye.lidWrap.getObjectByName('eyebrow');
+      if (!brow) return;
+      brow.position.y = (brow.userData.baseY ?? brow.position.y) + height;
+      if (!brow.userData.baseY) brow.userData.baseY = brow.position.y - height;
+      brow.scale.set(1, thickness, thickness);
+    });
+  }
+  setIrisTint(color) { for (const m of this.irisMaterials) m.color.set(color); }
+  setIrisRoughness(v) { for (const m of this.irisMaterials) m.roughness = v; }
+  setScleraRoughness(v) { for (const m of this.scleraMaterials) m.roughness = v; }
+  setScleraOpacity(v) { for (const m of this.scleraMaterials) m.opacity = v; }
+  setEnvIntensity(v) { for (const m of [...this.irisMaterials, ...this.scleraMaterials]) m.envMapIntensity = v; }
+  setLimbusOpacity(v) { if (this._limbusMats) this._limbusMats.forEach(m => { m.opacity = v; }); }
+  setTearFilmOpacity(v) { if (this._tearFilmMats) this._tearFilmMats.forEach(m => { m.opacity = v; }); }
+  setCatchLightOpacity(v) { if (this._catchLightMats) this._catchLightMats.forEach(m => { m.opacity = v; }); }
+  setSkinTexture(v) {
+    // v=0 disables bump, v>0 sets bumpScale
+    if (this._lidSkinMats) {
+      this._lidSkinMats.forEach(m => {
+        m.bumpScale = v;
+        m.needsUpdate = true;
+      });
+    }
+  }
+
+  setGaze(gx, gy, vergence, globeRotate, cyclops) {
+    const maxRot = Math.PI / 5;
+    const gr = globeRotate;
+    // Listing's law: torsion = -horizontal * vertical * k
+    // Natural counter-rotation when looking diagonally
+    const listingK = 0.12;
+    if (this.left) {
+      const h = gx * maxRot * gr + (cyclops ? 0 : vergence);
+      const v = -gy * maxRot * gr;
+      this.left.pivot.rotation.y = h;
+      this.left.pivot.rotation.x = v;
+      this.left.pivot.rotation.z = -h * v * listingK;
+    }
+    if (this.right && !cyclops) {
+      const h = gx * maxRot * gr - vergence;
+      const v = -gy * maxRot * gr;
+      this.right.pivot.rotation.y = h;
+      this.right.pivot.rotation.x = v;
+      this.right.pivot.rotation.z = -h * v * listingK;
+    }
+    // Iris parallax: offset iris meshes opposite to gaze for depth illusion
+    const pd = this._irisParallaxDepth || 0;
+    if (pd !== 0) {
+      for (const m of this.irisMeshes) {
+        const eye = m.parent;  // pivot or model group
+        const rotY = eye?.parent?.rotation?.y || 0;
+        const rotX = eye?.parent?.rotation?.x || 0;
+        m.position.x = -Math.sin(rotY) * pd;
+        m.position.y = Math.sin(rotX) * pd;
+      }
+    }
+  }
+
+  updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops) {
+    const eyes = cyclops ? [this.left] : [this.left, this.right];
+    eyes.forEach((eye, i) => {
+      if (!eye) return;
+      const ul = eye.lidWrap.getObjectByName('upperLid');
+      const ll = eye.lidWrap.getObjectByName('lowerLid');
+      const slantSign = cyclops ? 0 : (i === 0 ? 1 : -1);
+      eye.lidWrap.rotation.z = slant * slantSign;
+
+      const gazeDir = new THREE.Vector3(0, 0, 1);
+      if (eye.pivot) gazeDir.set(0, 0, 1).applyQuaternion(eye.pivot.quaternion);
+
+      this._displaceAlmondLid(ul, upperAngle, true, width, upperThickness, gazeDir);
+      this._displaceAlmondLid(ll, lowerAngle, false, width, lowerThickness, gazeDir);
+    });
+  }
+
+  _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir) {
+    if (!lidGroup) return;
+    lidGroup.traverse(mesh => {
+      if (!mesh.isMesh) return;
+      const geo = mesh.geometry;
+      const vp = geo.userData?.vertParams;
+      if (!vp) return; // edge strip has no vertParams, skip displacement
+      const R = geo.userData.radius;
+      const pos = geo.getAttribute('position');
+      // Outer inflates outward, inner deflates inward for visible edge thickness
+      const isInner = mesh.name === 'inner';
+      const thickSign = isInner ? -0.04 : 0.07;
+
+      for (let j = 0; j < pos.count; j++) {
+        const p = vp[j];
+        const edgeInfluence = 1.0 - p.v * 0.6;
+        const openShift = openAngle * edgeInfluence;
+        const adjAzimuth = p.baseAzimuth * width;
+        const thickR = R * (1.0 + thickness * thickSign * (1.0 - p.v));
+        const polar = p.basePolar + (isUpper ? -openShift : openShift);
+
+        let x = thickR * Math.sin(polar) * Math.sin(adjAzimuth);
+        let y = thickR * Math.cos(polar);
+        let z = thickR * Math.sin(polar) * Math.cos(adjAzimuth);
+
+        // Gaze bulge
+        const len = Math.sqrt(x * x + y * y + z * z) || 1;
+        const dot = (x * gazeDir.x + y * gazeDir.y + z * gazeDir.z) / len;
+        const bulge = Math.max(0, dot - 0.6) * 0.04;
+        x *= (1 + bulge);
+        y *= (1 + bulge);
+        z *= (1 + bulge);
+
+        pos.array[j * 3] = x;
+        pos.array[j * 3 + 1] = y;
+        pos.array[j * 3 + 2] = z;
+      }
+      pos.needsUpdate = true;
+    });
+
+    // Update edge strip from displaced outer + inner
+    const outer = lidGroup.getObjectByName('outer');
+    const inner = lidGroup.getObjectByName('inner');
+    const edge = lidGroup.getObjectByName('edge');
+    if (outer && inner && edge) {
+      const oPos = outer.geometry.getAttribute('position');
+      const iPos = inner.geometry.getAttribute('position');
+      const ePos = edge.geometry.getAttribute('position');
+      const segsU = oPos.count / (12 + 1) - 1; // reconstruct from vertex count
+      // Edge strip has (segsU+1)*2 vertices: alternating outer[i], inner[i]
+      const edgeCount = ePos.count / 2;
+      for (let i = 0; i < edgeCount; i++) {
+        ePos.array[i * 6]     = oPos.getX(i);
+        ePos.array[i * 6 + 1] = oPos.getY(i);
+        ePos.array[i * 6 + 2] = oPos.getZ(i);
+        ePos.array[i * 6 + 3] = iPos.getX(i);
+        ePos.array[i * 6 + 4] = iPos.getY(i);
+        ePos.array[i * 6 + 5] = iPos.getZ(i);
+      }
+      ePos.needsUpdate = true;
+    }
+  }
+
+  updateLayout(spacing, scale, tilt, cyclops) {
+    const s = spacing / 2;
+    if (cyclops) {
+      if (this.left) { this.left.group.visible = true; this.left.group.position.set(0, 0, 0); this.left.group.scale.setScalar(scale * 1.3); }
+      if (this.right) this.right.group.visible = false;
+    } else {
+      if (this.left) { this.left.group.visible = true; this.left.group.position.set(-s, 0, 0); this.left.group.scale.setScalar(scale); }
+      if (this.right) { this.right.group.visible = true; this.right.group.position.set(s, 0, 0); this.right.group.scale.setScalar(scale); }
+    }
+    this.eyeGroup.rotation.z = tilt;
+  }
+
+  updateLighting(angle, height, intensity) {
+    if (this.keyLight) {
+      this.keyLight.position.set(Math.cos(angle) * 4, height * 2, Math.sin(angle) * 4);
+      this.keyLight.intensity = intensity;
+    }
+    // Update catch light positions based on key light direction
+    if (this._catchLightMeshes) {
+      const lx = Math.cos(angle) * 0.3;
+      const ly = Math.min(1, height * 0.4);
+      for (const cl of this._catchLightMeshes) {
+        const c = cl.userData.scleraCenter;
+        const r = cl.userData.scleraR;
+        cl.position.set(c.x + lx * r, c.y + ly * r, c.z + r * 1.003);
+      }
+    }
+  }
+
+  setBgColor(c) { this.scene.background = new THREE.Color(c); }
+
+  setEnvLight(enabled) {
+    if (enabled) {
+      if (this._savedEnv) { this.scene.environment = this._savedEnv; this._savedEnv = null; }
+      else this._setupEnv();
+    } else {
+      this._savedEnv = this.scene.environment;
+      this.scene.environment = null;
+    }
+  }
+
+  render() { this.renderer.render(this.scene, this.camera); }
+
+  _onResize() { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
+}
+
+
+// ============================================================
+// EYE CONTROLLER — behavior state (will be replaced by eyemech)
+// ============================================================
+class EyeController {
+  constructor() {
+    this.params = {
+      pupilSize: 0.35,
+      irisColorTint: '#ffffff', irisRoughness: 0.45, irisDepth: -0.001, irisParallax: 0.005,
+      browHeight: 0, browThickness: 1.0, browShow: 0,
+      lid3d: 1,
+      corneaSpecular: 1.63, corneaRoughness: 0.13, corneaIor: 1.376, corneaEnv: 2.5, corneaGlobalBulge: 0, corneaClearcoat: 1.0, corneaTransmission: 0.99, corneaThickness: 0.05,
+      eyeballScale: 2.0, corneaScale: 0.80, skinScale: 0.73,
+      scleraRoughness: 0.3, scleraOpacity: 1.0, envIntensity: 1.0, limbusOpacity: 0.35, tearFilm: 0.12, catchLight: 0.70,
+      lidOpen: 0.67, lidUpperTilt: -0.22, lidLowerTilt: -0.02, lidSlant: 0.01,
+      lidWidth: 1.08, lidUpperThickness: 0.65, lidLowerThickness: 0.65, lidLowerRatio: 0.60,
+      lidCornerSharp: 1.2, lidCreaseDepth: 0.4, lidShadow: 0.30,
+      lashesShow: 1, skinTexture: 0.003,
+      lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#bb7066',
+      lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
+      eyeScale: 1.15, eyeSpacing: 1.80, eyeTilt: 0, cyclops: 0,
+      smoothing: 0.07, sensitivity: 1.0, maxTravel: 0.42, globeRotate: 0.8,
+      parallaxX: 0, parallaxY: -0.08, vergenceBase: 0.04, vergenceMax: 0.3,
+      reflectionIntensity: 1.0,
+      bgColor: '#050508', envLight: 1, lightAngle: 1.8, lightHeight: 1.5, lightIntensity: 2.5,
+    };
+    // Load saved defaults from localStorage
+    try {
+      const saved = localStorage.getItem('eyeseeyou_defaults');
+      if (saved) Object.assign(this.params, JSON.parse(saved));
+    } catch (e) {}
+    this._gaze = { targetX: 0, targetY: 0, targetZ: 0.5, currentX: 0, currentY: 0, currentZ: 0.5, vergence: 0 };
+    this._blink = {
+      active: false, progress: 0,
+      speed: 7.5,           // current blink speed multiplier
+      doubleQueued: false,   // true = fire a second blink right after
+      lastBlinkTime: 0,      // timestamp of last blink
+    };
+    this._emoTargets = { ...EMOTIONS.neutral };
+    this._gazeMode = 'continuous';
+    this._micro = {
+      timer: 0,
+      // Saccade state
+      saccadeActive: false,
+      saccadeDur: 0,        // total duration of current saccade (~25-50ms)
+      saccadeElapsed: 0,
+      saccadeDX: 0, saccadeDY: 0,  // saccade target delta
+      saccadeFromX: 0, saccadeFromY: 0,
+      nextSaccadeIn: 0.3 + Math.random() * 1.5,  // time until next saccade
+      // Slow drift baseline
+      driftX: 0, driftY: 0,
+    };
+    this._motion = { lastX: 0, lastY: 0, triggered: false, decay: 0 };
+    this._lurk = { timer: 0, looking: false, cooldown: 0, tx: 0, ty: 0 };
+    this._pursuit = {
+      prevTargetX: 0, prevTargetY: 0,
+      velocity: 0,            // smoothed target velocity
+      mode: 'pursuit',        // 'pursuit' (slow track) or 'saccade' (snap)
+      saccadeSettleTime: 0,   // cooldown after saccade before pursuit resumes
+    };
+    this.face = { x: 0, y: 0, z: 0.5, detected: false, lastTime: 0 };
+    this._scheduleBlink();
+  }
+
+  get gazeMode() { return this._gazeMode; }
+  set gazeMode(v) { this._gazeMode = v; }
+
+  setEmotion(name) {
+    const e = EMOTIONS[name];
+    if (e) this._emoTargets = { ...e };
+  }
+
+  triggerBlink(allowDouble = true) {
+    if (!this._blink.active) {
+      this._blink.active = true;
+      this._blink.progress = 0;
+      // Variable speed: 6-9 (faster = quicker blink, ~130-170ms total)
+      this._blink.speed = 6 + Math.random() * 3;
+      // ~15% chance of double blink (two quick blinks in succession)
+      this._blink.doubleQueued = allowDouble && Math.random() < 0.15;
+      this._blink.lastBlinkTime = this._micro.timer;
+    }
+  }
+
+  setParam(key, value) {
+    this.params[key] = value;
+    if (key in this._emoTargets) this._emoTargets[key] = value;
+  }
+
+  update(dt) {
+    const p = this.params;
+    const lr = (a, b, t) => a + (b - a) * t;
+    const el = 0.055;
+    p.lidOpen = lr(p.lidOpen, this._emoTargets.lidOpen, el);
+    p.lidUpperTilt = lr(p.lidUpperTilt, this._emoTargets.lidUpperTilt, el);
+    p.lidLowerTilt = lr(p.lidLowerTilt, this._emoTargets.lidLowerTilt, el);
+    p.lidSlant = lr(p.lidSlant, this._emoTargets.lidSlant, el);
+    p.pupilSize = lr(p.pupilSize, this._emoTargets.pupilSize, el);
+    p.lidLowerRatio = lr(p.lidLowerRatio, this._emoTargets.lidLowerRatio, el);
+    p.lidWidth = lr(p.lidWidth, this._emoTargets.lidWidth, el);
+
+    this._updateGazeMode(dt);
+    const g = this._gaze;
+
+    // Smooth pursuit vs saccade: compute target velocity
+    const pu = this._pursuit;
+    const dx = g.targetX - pu.prevTargetX;
+    const dy = g.targetY - pu.prevTargetY;
+    const rawVel = dt > 0 ? Math.sqrt(dx * dx + dy * dy) / dt : 0;
+    pu.velocity += (rawVel - pu.velocity) * 0.15;  // smooth velocity estimate
+    pu.prevTargetX = g.targetX;
+    pu.prevTargetY = g.targetY;
+
+    // Mode switching based on velocity
+    const saccadeThreshold = 0.8;   // velocity above this → saccade
+    const pursuitThreshold = 0.15;  // velocity below this → resume pursuit
+    if (pu.mode === 'pursuit' && pu.velocity > saccadeThreshold) {
+      pu.mode = 'saccade';
+      pu.saccadeSettleTime = 0.08;  // brief settle after saccade
+      // Trigger reactive blink on large saccades
+      this.triggerReactiveBlink(pu.velocity);
+    } else if (pu.mode === 'saccade') {
+      pu.saccadeSettleTime -= dt;
+      if (pu.saccadeSettleTime <= 0 && pu.velocity < pursuitThreshold) {
+        pu.mode = 'pursuit';
+      }
+    }
+
+    // Smoothing: saccade=fast snap, pursuit=slow track, jumpscare=medium
+    let sm;
+    if (this._gazeMode === 'jumpscare' && this._lurk.looking) {
+      sm = 0.18;
+    } else if (pu.mode === 'saccade') {
+      sm = 0.25;  // fast snap for saccades
+    } else {
+      sm = p.smoothing;  // normal smooth pursuit
+    }
+
+    g.currentX += (g.targetX - g.currentX) * sm;
+    g.currentY += (g.targetY - g.currentY) * sm;
+    g.currentZ += (g.targetZ - g.currentZ) * sm * 0.5;
+    const tgtV = p.vergenceBase + Math.max(0, g.currentZ - 0.35) * p.vergenceMax;
+    g.vergence += (tgtV - g.vergence) * sm * 0.7;
+    this._updateBlink(dt);
+  }
+
+  getGaze() {
+    const g = this._gaze;
+    return { x: Math.max(-1, Math.min(1, g.currentX)), y: Math.max(-1, Math.min(1, g.currentY)), vergence: g.vergence };
+  }
+
+  getBlinkAmount() {
+    if (!this._blink.active) return 0;
+    const t = this._blink.progress;
+    // Asymmetric blink: close fast (30%), open slower (70%)
+    return t < 0.3 ? Math.sin(t / 0.3 * Math.PI / 2) : Math.cos((t - 0.3) / 0.7 * Math.PI / 2);
+  }
+
+  // Reactive blink — call when gaze target changes suddenly
+  triggerReactiveBlink(gazeSpeed) {
+    // Large gaze jumps (>0.3 normalized speed) trigger reflexive blink
+    if (gazeSpeed > 0.3 && !this._blink.active) {
+      const timeSinceLast = this._micro.timer - this._blink.lastBlinkTime;
+      if (timeSinceLast > 0.5) this.triggerBlink(false);
+    }
+  }
+
+  _updateGazeMode(dt) {
+    const f = this.face, g = this._gaze;
+    if (this._gazeMode === 'continuous') {
+      if (f.detected) { g.targetX = f.x; g.targetY = f.y; g.targetZ = f.z; } else this._updateMicro(dt);
+    } else if (this._gazeMode === 'motion') {
+      if (f.detected) {
+        const d = Math.abs(f.x - this._motion.lastX) + Math.abs(f.y - this._motion.lastY);
+        if (d > 0.03) { this._motion.triggered = true; this._motion.decay = 2.5; this._motion.lastX = f.x; this._motion.lastY = f.y; }
+        if (this._motion.triggered) { g.targetX = f.x; g.targetY = f.y; g.targetZ = f.z; this._motion.decay -= dt; if (this._motion.decay <= 0) this._motion.triggered = false; }
+        else this._updateMicro(dt);
+      } else { this._motion.triggered = false; this._updateMicro(dt); }
+    } else if (this._gazeMode === 'jumpscare') {
+      this._lurk.timer += dt;
+      if (!this._lurk.looking) {
+        this._updateMicro(dt);
+        if (f.detected && this._lurk.cooldown <= 0 && Math.random() < 0.003 + 0.01 * (this._lurk.timer > 10 ? 1 : 0)) {
+          this._lurk.looking = true; this._lurk.timer = 0; this._lurk.tx = f.x; this._lurk.ty = f.y;
+        }
+        this._lurk.cooldown = Math.max(0, this._lurk.cooldown - dt);
+      } else {
+        g.targetX = f.detected ? f.x : this._lurk.tx; g.targetY = f.detected ? f.y : this._lurk.ty; g.targetZ = 0.7;
+        if (this._lurk.timer > 1.5 + Math.random() * 2.5) { this._lurk.looking = false; this._lurk.timer = 0; this._lurk.cooldown = 3 + Math.random() * 5; }
+      }
+    }
+  }
+
+  _updateMicro(dt) {
+    const m = this._micro;
+    m.timer += dt;
+    const g = this._gaze;
+
+    // --- Slow inter-saccadic drift (very subtle, ~0.01-0.03 amplitude) ---
+    const t = m.timer;
+    m.driftX += (Math.sin(t * 0.7) * 0.02 + Math.sin(t * 2.3) * 0.008 - m.driftX) * 0.02;
+    m.driftY += (Math.cos(t * 0.5) * 0.015 + Math.cos(t * 1.9) * 0.006 - m.driftY) * 0.02;
+
+    // --- Saccade scheduling ---
+    if (!m.saccadeActive) {
+      m.nextSaccadeIn -= dt;
+      if (m.nextSaccadeIn <= 0) {
+        // Fire a micro-saccade
+        m.saccadeActive = true;
+        m.saccadeElapsed = 0;
+        m.saccadeDur = 0.025 + Math.random() * 0.03;  // 25-55ms
+        // Amplitude: 0.01-0.08 in normalized gaze coords (~0.5-4° real)
+        const amp = 0.01 + Math.random() * 0.07;
+        const angle = Math.random() * Math.PI * 2;
+        m.saccadeDX = Math.cos(angle) * amp;
+        m.saccadeDY = Math.sin(angle) * amp;
+        m.saccadeFromX = g.targetX;
+        m.saccadeFromY = g.targetY;
+        // Next saccade in 0.2-2s (log-normal-ish distribution)
+        m.nextSaccadeIn = 0.2 + Math.random() * Math.random() * 2.0;
+      }
+      // Between saccades: apply drift only
+      g.targetX = m.driftX;
+      g.targetY = m.driftY;
+    }
+
+    // --- Active saccade: fast ballistic movement ---
+    if (m.saccadeActive) {
+      m.saccadeElapsed += dt;
+      // Saccade velocity profile: raised cosine (fast start, fast end)
+      let p = Math.min(1, m.saccadeElapsed / m.saccadeDur);
+      p = 0.5 - 0.5 * Math.cos(p * Math.PI);  // smooth ease-in-out
+      g.targetX = m.saccadeFromX + m.saccadeDX * p;
+      g.targetY = m.saccadeFromY + m.saccadeDY * p;
+      if (m.saccadeElapsed >= m.saccadeDur) {
+        m.saccadeActive = false;
+        // Update drift center to land position
+        m.driftX = g.targetX;
+        m.driftY = g.targetY;
+      }
+    }
+
+    g.targetZ = 0.5;
+  }
+
+  _updateBlink(dt) {
+    if (!this._blink.active) return;
+    this._blink.progress += dt * this._blink.speed;
+    if (this._blink.progress >= 1) {
+      this._blink.active = false;
+      this._blink.progress = 0;
+      // Double blink: fire again immediately with faster speed
+      if (this._blink.doubleQueued) {
+        this._blink.doubleQueued = false;
+        this._blink.active = true;
+        this._blink.speed = 9 + Math.random() * 2;  // second blink is faster
+      }
+    }
+  }
+
+  _scheduleBlink() {
+    // Human blink interval: ~3-7s average, log-normal distribution
+    // Occasional longer pauses (up to 10s) for naturalness
+    const base = 2500 + Math.random() * 3500;
+    const jitter = Math.random() < 0.15 ? Math.random() * 4000 : 0;  // rare long pause
+    setTimeout(() => { this.triggerBlink(); this._scheduleBlink(); }, base + jitter);
+  }
+}
+
+
+// ============================================================
+// FACE TRACKER
+// ============================================================
+class FaceTracker {
+  constructor(controller) {
+    this.controller = controller;
+    this.model = null;
+    this.video = null;
+    this._lastTime = 0;
+    this._interval = IS_MOBILE ? 50 : 33;
+  }
+
+  async init() {
+    setLoadingStatus('Loading face detection...');
+    if (typeof tf === 'undefined' || typeof blazeface === 'undefined') throw new Error('TF not loaded');
+    try { await tf.setBackend('webgl'); } catch (e) {}
+    await tf.ready();
+    this.model = await blazeface.load();
+    setLoadingStatus('Requesting camera...');
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: { width: { ideal: IS_MOBILE ? 320 : 480 }, height: { ideal: IS_MOBILE ? 240 : 360 }, facingMode: 'user' }, audio: false,
+    });
+    this.video = document.getElementById('webcam-debug');
+    this.video.srcObject = stream;
+    this.video.setAttribute('playsinline', '');
+    await new Promise(r => { this.video.onloadedmetadata = r; });
+    try { await this.video.play(); } catch (e) { document.addEventListener('touchstart', async () => { await this.video.play(); }, { once: true }); }
+    if ('wakeLock' in navigator) try { await navigator.wakeLock.request('screen'); } catch (e) {}
+    this._loop();
+  }
+
+  initPointerFallback() {
+    const h = (x, y) => {
+      const p = this.controller.params;
+      this.controller.face.x = (x / innerWidth * 2 - 1) * p.sensitivity + p.parallaxX;
+      this.controller.face.y = -(y / innerHeight * 2 - 1) * p.sensitivity + p.parallaxY;
+      this.controller.face.z = 0.5;
+      this.controller.face.detected = true;
+      this.controller.face.lastTime = performance.now();
+    };
+    document.addEventListener('mousemove', e => h(e.clientX, e.clientY));
+    document.addEventListener('touchmove', e => { e.preventDefault(); h(e.touches[0].clientX, e.touches[0].clientY); }, { passive: false });
+    document.addEventListener('touchstart', e => h(e.touches[0].clientX, e.touches[0].clientY), { passive: true });
+    document.addEventListener('touchend', () => setTimeout(() => { this.controller.face.detected = false; }, 1500));
+  }
+
+  _loop() {
+    if (!this.model || !this.video || this.video.readyState < 2) { requestAnimationFrame(() => this._loop()); return; }
+    const now = performance.now();
+    if (now - this._lastTime < this._interval) { requestAnimationFrame(() => this._loop()); return; }
+    this._lastTime = now;
+    this.model.estimateFaces(this.video, false).then(preds => {
+      const p = this.controller.params;
+      if (preds.length > 0) {
+        const f = preds[0], re = f.landmarks[0], le = f.landmarks[1];
+        const cx = (re[0] + le[0]) / 2 / this.video.videoWidth, cy = (re[1] + le[1]) / 2 / this.video.videoHeight;
+        const ed = Math.sqrt(Math.pow((re[0] - le[0]) / this.video.videoWidth, 2) + Math.pow((re[1] - le[1]) / this.video.videoHeight, 2));
+        this.controller.face.x = -(cx * 2 - 1) * p.sensitivity + p.parallaxX;
+        this.controller.face.y = -(cy * 2 - 1) * p.sensitivity + p.parallaxY;
+        this.controller.face.z = Math.min(1.0, ed * 4.0);
+        this.controller.face.detected = true;
+        this.controller.face.lastTime = now;
+        setStatus('active', 'Tracking');
+      } else if (this.controller.face.detected && now - this.controller.face.lastTime > 500) {
+        this.controller.face.detected = false;
+        setStatus('inactive', 'No face');
+      }
+    }).catch(() => {});
+    requestAnimationFrame(() => this._loop());
+  }
+}
+
+
+// ============================================================
+// DEBUG UI
+// ============================================================
+class DebugUI {
+  constructor(ctrl, rend) { this.ctrl = ctrl; this.rend = rend; }
+
+  init() {
+    document.getElementById('panel-toggle').addEventListener('click', () => document.getElementById('panel').classList.toggle('open'));
+
+    document.querySelectorAll('#panel input[type=range]').forEach(inp => {
+      const vs = inp.parentElement.querySelector('.v');
+      inp.addEventListener('input', () => { vs.textContent = parseFloat(inp.value).toFixed(2); this._apply(inp.id, parseFloat(inp.value)); });
+      // Double-click on value label to type any value (even beyond slider range)
+      vs.style.cursor = 'pointer';
+      vs.addEventListener('dblclick', () => {
+        const cur = parseFloat(inp.value);
+        const nv = prompt(`${inp.id.replace('p-', '')} — enter value:`, cur);
+        if (nv === null) return;
+        const v = parseFloat(nv);
+        if (isNaN(v)) return;
+        inp.value = v;
+        vs.textContent = v.toFixed(2);
+        this._apply(inp.id, v);
+      });
+    });
+    document.querySelectorAll('#panel input[type=color]').forEach(inp => {
+      inp.addEventListener('input', () => this._apply(inp.id, inp.value));
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.key === 'Tab') { e.preventDefault(); document.getElementById('panel').classList.toggle('open'); }
+      if (e.key === 'f' || e.key === 'F') { if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); }
+      if (e.key === 'd' || e.key === 'D') { const v = document.getElementById('webcam-debug'); v.style.display = v.style.display === 'none' ? 'block' : 'none'; }
+    });
+
+    document.querySelectorAll('.emo-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.emo-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.ctrl.setEmotion(btn.dataset.emo);
+      });
+    });
+
+    document.querySelectorAll('.mode-btn').forEach(btn => {
+      btn.addEventListener('click', () => {
+        document.querySelectorAll('.mode-btn').forEach(b => b.classList.remove('active'));
+        btn.classList.add('active');
+        this.ctrl.gazeMode = btn.dataset.mode;
+      });
+    });
+
+    // Reflection source
+    const envSource = document.getElementById('p-envSource');
+    const envImageRow = document.getElementById('env-image-row');
+    const envPhotoRow = document.getElementById('env-photo-row');
+    const envImageInput = document.getElementById('env-image-input');
+    const envPhotoBtn = document.getElementById('env-photo-btn');
+
+    envSource.addEventListener('change', () => {
+      const mode = envSource.value;
+      envImageRow.style.display = mode === 'image' ? '' : 'none';
+      envPhotoRow.style.display = mode === 'photo' ? '' : 'none';
+      if (mode === 'default') this.rend.setEnvDefault();
+      if (mode === 'video') {
+        navigator.mediaDevices.getUserMedia({ video: { width: 640, height: 480 } }).then(stream => {
+          this.rend.setEnvVideo(stream);
+        }).catch(e => { console.warn('Webcam denied:', e); envSource.value = 'default'; this.rend.setEnvDefault(); });
+      }
+    });
+
+    envImageInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        const img = new Image();
+        img.onload = () => {
+          const tex = new THREE.Texture(img);
+          tex.needsUpdate = true;
+          this.rend.setEnvImage(tex);
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+
+    envPhotoBtn.addEventListener('click', async () => {
+      try {
+        envPhotoBtn.textContent = 'Opening camera...';
+        const stream = await navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } });
+        const video = document.createElement('video');
+        video.srcObject = stream;
+        video.muted = true;
+        video.playsInline = true;
+        await video.play();
+        // Wait a moment for camera to adjust exposure
+        await new Promise(r => setTimeout(r, 500));
+        const canvas = document.createElement('canvas');
+        canvas.width = video.videoWidth;
+        canvas.height = video.videoHeight;
+        const ctx = canvas.getContext('2d');
+        ctx.translate(canvas.width, 0);
+        ctx.scale(-1, 1);
+        ctx.drawImage(video, 0, 0);
+        stream.getTracks().forEach(t => t.stop());
+        const tex = new THREE.CanvasTexture(canvas);
+        this.rend.setEnvImage(tex);
+        envPhotoBtn.textContent = 'Captured!';
+        setTimeout(() => { envPhotoBtn.textContent = 'Capture Webcam'; }, 1500);
+      } catch (e) {
+        console.warn('Webcam denied:', e);
+        envPhotoBtn.textContent = 'Capture Webcam';
+      }
+    });
+
+    let immerseTO = null;
+    document.getElementById('immerse-btn').addEventListener('click', () => {
+      document.body.classList.add('immersed');
+      try { document.documentElement.requestFullscreen?.(); } catch (e) {}
+    });
+    const peekUI = () => {
+      if (!document.body.classList.contains('immersed')) return;
+      document.body.classList.add('ui-peek');
+      clearTimeout(immerseTO);
+      immerseTO = setTimeout(() => document.body.classList.remove('ui-peek'), 2500);
+    };
+    document.addEventListener('mousemove', peekUI);
+    document.addEventListener('touchstart', peekUI);
+    document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('immersed', 'ui-peek'); });
+
+    // Make Default buttons
+    document.getElementById('make-default-btn').addEventListener('click', () => {
+      localStorage.setItem('eyeseeyou_defaults', JSON.stringify(this.ctrl.params));
+      const btn = document.getElementById('make-default-btn');
+      btn.textContent = 'SAVED!';
+      setTimeout(() => { btn.textContent = 'Save as Default'; }, 1500);
+    });
+    document.getElementById('reset-default-btn').addEventListener('click', () => {
+      localStorage.removeItem('eyeseeyou_defaults');
+      location.reload();
+    });
+
+    // Sync sliders with loaded params (in case localStorage overrode defaults)
+    for (const [key, val] of Object.entries(this.ctrl.params)) {
+      const inp = document.getElementById('p-' + key);
+      if (!inp) continue;
+      if (inp.type === 'range') {
+        inp.value = val;
+        const vs = inp.parentElement.querySelector('.v');
+        if (vs) vs.textContent = typeof val === 'number' ? parseFloat(val).toFixed(2) : val;
+      } else if (inp.type === 'color') {
+        inp.value = val;
+      }
+    }
+
+    // Tooltips on hover (2s delay)
+    const TOOLTIPS = {
+      'p-irisColorTint': 'Tints the iris texture color. White = no tint.',
+      'p-irisRoughness': 'Surface roughness of the iris. Lower = shinier.',
+      'p-irisDepth': 'Z-offset of the iris mesh inside the eye.',
+      'p-pupilSize': 'Base pupil dilation. Emotions also affect this.',
+      'p-lid3d': 'Toggle between 3D shaded lids and flat black silhouette.',
+      'p-lidOpen': 'How wide the eye opens. Overridden by active emotion.',
+      'p-lidUpperTilt': 'Tilts the upper eyelid curve. Positive = lifts center.',
+      'p-lidLowerTilt': 'Tilts the lower eyelid curve.',
+      'p-lidSlant': 'Rotational slant of the entire eye opening.',
+      'p-lidWidth': 'Horizontal stretch of the lid opening. >1 = wider eye.',
+      'p-lidUpperThickness': '3D thickness of the upper eyelid. Inflates outer, deflates inner.',
+      'p-lidLowerThickness': '3D thickness of the lower eyelid. Inflates outer, deflates inner.',
+      'p-lidLowerRatio': 'How much the lower lid moves relative to upper when opening.',
+      'p-lidCornerSharp': 'Sharpness of the almond eye corners. Higher = pointier.',
+      'p-lidCreaseDepth': 'Depth of the eyelid crease fold. 1 = full hemisphere coverage.',
+      'p-lidShadow': 'Intensity of the shadow cast by the eyelids onto the eyeball.',
+      'p-lidSkinColor': 'Color of the upper eyelid outer skin surface.',
+      'p-lidLowerColor': 'Color of the lower eyelid outer skin surface.',
+      'p-lidEdgeColor': 'Color of the lid edge / waterline strip.',
+      'p-lidOuterAngle': 'Asymmetric tilt between inner and outer eye corners.',
+      'p-lidRoughness': 'Surface roughness of lid skin material. Lower = glossier.',
+      'p-lidSheen': 'Sheen intensity on lid skin. Simulates subsurface light scattering.',
+      'p-lidClearcoat': 'Clearcoat layer on lid skin. Adds a subtle wet/oily look.',
+      'p-corneaSpecular': 'Specular reflectivity of the cornea surface.',
+      'p-corneaRoughness': 'Roughness of the cornea. Lower = mirror-like reflections.',
+      'p-corneaIor': 'Index of refraction of the cornea (real eye ~1.376).',
+      'p-corneaEnv': 'Environment map intensity on the cornea.',
+      'p-corneaGlobalBulge': 'Global bulge morph target on the cornea mesh.',
+      'p-corneaClearcoat': 'Clearcoat layer intensity on the cornea.',
+      'p-corneaTransmission': 'Transmission (transparency) of the cornea. 1 = fully transparent.',
+      'p-corneaThickness': 'Simulated thickness for transmission refraction.',
+      'p-scleraOpacity': 'Opacity of the sclera (white of the eye).',
+      'p-scleraRoughness': 'Surface roughness of the sclera.',
+      'p-envIntensity': 'Environment map intensity on the sclera.',
+      'p-eyeballScale': 'Scale of the eyeball sphere. Linked with cornea/skin.',
+      'p-corneaScale': 'Scale of the cornea dome. Must be <= eyeballScale.',
+      'p-skinScale': 'Scale of the skin/lid wrap. Must be >= corneaScale.',
+      'p-browShow': 'Show or hide the eyebrow geometry.',
+      'p-browHeight': 'Vertical offset of the eyebrow.',
+      'p-browThickness': 'Thickness multiplier for the eyebrow.',
+      'p-eyeScale': 'Overall scale of both eyes together.',
+      'p-eyeSpacing': 'Horizontal distance between the two eyes.',
+      'p-eyeTilt': 'Rotation of the entire eye pair.',
+      'p-cyclops': 'Merge both eyes into a single centered eye.',
+      'p-smoothing': 'Gaze tracking smoothing. Lower = more responsive but jittery.',
+      'p-sensitivity': 'Multiplier for gaze tracking movement range.',
+      'p-maxTravel': 'Maximum distance the iris can travel from center.',
+      'p-globeRotate': 'How much the entire eyeball rotates with gaze.',
+      'p-parallaxX': 'Horizontal parallax offset for the gaze.',
+      'p-parallaxY': 'Vertical parallax offset for the gaze.',
+      'p-vergenceBase': 'Base inward eye convergence (cross-eyed amount at rest).',
+      'p-vergenceMax': 'Maximum convergence when looking at near objects.',
+      'p-bgColor': 'Scene background color.',
+      'p-envLight': 'Toggle the environment lighting (PMREM). Off = only direct lights.',
+      'p-lightAngle': 'Horizontal angle of the key light around the scene.',
+      'p-lightHeight': 'Vertical position of the key light.',
+      'p-lightIntensity': 'Brightness of the key light.',
+      'p-reflectionIntensity': 'Global intensity of environment reflections.',
+    };
+    const tipEl = document.createElement('div');
+    tipEl.id = 'tooltip';
+    tipEl.style.cssText = 'position:fixed;background:rgba(8,8,18,0.95);color:rgba(255,255,255,0.75);font-size:9px;padding:6px 10px;border-radius:4px;border:1px solid rgba(255,255,255,0.1);max-width:200px;line-height:1.4;pointer-events:none;z-index:400;display:none;font-family:"Space Mono",monospace;';
+    document.body.appendChild(tipEl);
+    let tipTimer = null;
+    document.querySelectorAll('#panel .pr').forEach(row => {
+      const inp = row.querySelector('input, select');
+      if (!inp || !TOOLTIPS[inp.id]) return;
+      row.addEventListener('mouseenter', () => {
+        tipTimer = setTimeout(() => {
+          tipEl.textContent = TOOLTIPS[inp.id];
+          const rect = row.getBoundingClientRect();
+          tipEl.style.top = rect.top + 'px';
+          tipEl.style.left = (rect.left - 210) + 'px';
+          tipEl.style.display = 'block';
+        }, 2000);
+      });
+      row.addEventListener('mouseleave', () => { clearTimeout(tipTimer); tipEl.style.display = 'none'; });
+    });
+  }
+
+  _apply(id, val) {
+    const key = id.replace('p-', '');
+    this.ctrl.setParam(key, val);
+    const r = this.rend;
+    switch (key) {
+      case 'irisColorTint': r.setIrisTint(val); break;
+      case 'irisRoughness': r.setIrisRoughness(val); break;
+      case 'irisDepth': r.setIrisDepth(val); break;
+      case 'irisParallax': r.setIrisParallax(val); break;
+      case 'browHeight': case 'browThickness':
+        r.updateBrows(this.ctrl.params.browHeight, this.ctrl.params.browThickness, this.ctrl.params.cyclops); break;
+      case 'corneaSpecular': r.setCorneaParam('reflectivity', val); break;
+      case 'corneaRoughness': r.setCorneaParam('roughness', val); r.setCorneaParam('clearcoatRoughness', val); break;
+      case 'corneaIor': r.setCorneaParam('ior', val); break;
+      case 'corneaEnv': r.setCorneaParam('envMapIntensity', val); break;
+      case 'corneaClearcoat': r.setCorneaParam('clearcoat', val); break;
+      case 'corneaTransmission': r.setCorneaParam('transmission', val); break;
+      case 'corneaThickness': r.setCorneaParam('thickness', val); break;
+      case 'corneaGlobalBulge': r.setGlobalBulge(val); break;
+      case 'browShow':
+        for (const eye of [r.left, r.right]) {
+          const b = eye?.lidWrap?.getObjectByName('eyebrow');
+          if (b) b.visible = !!val;
+        }
+        break;
+      case 'lid3d': r.setLid3d(!!val); break;
+      case 'lashesShow':
+        for (const eye of [r.left, r.right]) {
+          if (!eye) continue;
+          for (const name of ['upperLid', 'lowerLid']) {
+            const grp = eye.lidWrap?.getObjectByName(name);
+            const lash = grp?.getObjectByName('lashes');
+            if (lash) lash.visible = !!val;
+          }
+        }
+        break;
+      case 'lidCornerSharp': r.setLidParam('cornerSharp', val); break;
+      case 'lidCreaseDepth': r.setLidParam('creaseDepth', val); break;
+      case 'lidShadow': r.setLidShadowOpacity(val); break;
+      case 'lidSkinColor': r.setLidSkinColor(val); break;
+      case 'lidLowerColor': r.setLidLowerColor(val); break;
+      case 'lidEdgeColor': r.setLidEdgeColor(val); break;
+      case 'lidRoughness': r.setLidRoughness(val); break;
+      case 'lidSheen': r.setLidSheen(val); break;
+      case 'lidClearcoat': r.setLidClearcoat(val); break;
+      case 'skinTexture': r.setSkinTexture(val); break;
+      case 'lidOuterAngle': r.setLidParam('outerAngle', val); break;
+      case 'eyeballScale': case 'corneaScale': case 'skinScale':
+        this._applyLinkedScales(key, val); break;
+      case 'scleraRoughness': r.setScleraRoughness(val); break;
+      case 'scleraOpacity': r.setScleraOpacity(val); break;
+      case 'envIntensity': r.setEnvIntensity(val); break;
+      case 'limbusOpacity': r.setLimbusOpacity(val); break;
+      case 'tearFilm': r.setTearFilmOpacity(val); break;
+      case 'catchLight': r.setCatchLightOpacity(val); break;
+      case 'reflectionIntensity': r.setReflectionIntensity(val); break;
+      case 'bgColor': r.setBgColor(val); break;
+      case 'envLight': r.setEnvLight(!!val); break;
+      case 'pupilSize': case 'pupilCat': case 'pupilGoat': case 'pupilHeart':
+      case 'pupilOval': case 'pupilReptile':
+      case 'irisGrow': case 'irisShrink':
+      case 'corneaBulge':
+        r.setMorphTarget(key, val); break;
+    }
+  }
+
+  // Linked scales: eyeball <= cornea <= skin
+  // Changing one pushes the others to maintain containment
+  _applyLinkedScales(changed, val) {
+    const p = this.ctrl.params;
+    const r = this.rend;
+    const margin = 0.001; // tiny gap — geometry already has built-in offsets (1.002x, 1.05x)
+
+    if (changed === 'eyeballScale') {
+      p.eyeballScale = val;
+    } else if (changed === 'corneaScale') {
+      p.corneaScale = val;
+    } else if (changed === 'skinScale') {
+      p.skinScale = val;
+    }
+
+    // Apply all three
+    r.setEyeballScale(p.eyeballScale);
+    r.setCorneaScale(p.corneaScale);
+    r.setSkinScale(p.skinScale);
+
+    // Update sliders + value labels to reflect pushed values
+    this._syncSlider('p-eyeballScale', p.eyeballScale);
+    this._syncSlider('p-corneaScale', p.corneaScale);
+    this._syncSlider('p-skinScale', p.skinScale);
+  }
+
+  _syncSlider(id, val) {
+    const inp = document.getElementById(id);
+    if (!inp) return;
+    inp.value = val;
+    const vs = inp.parentElement.querySelector('.v');
+    if (vs) vs.textContent = val.toFixed(2);
+  }
+}
+
+
+// ============================================================
+// HELPERS
+// ============================================================
+function setLoadingStatus(t) { document.getElementById('loading-status').textContent = t; }
+function setStatus(type, text) { document.getElementById('status-dot').className = 'dot ' + type; document.getElementById('status-text').textContent = text; }
+
+
+// ============================================================
+// MAIN
+// ============================================================
+async function main() {
+  const container = document.getElementById('canvas-container');
+  const renderer = new EyeRenderer(container);
+  const controller = new EyeController();
+  const tracker = new FaceTracker(controller);
+  const ui = new DebugUI(controller, renderer);
+
+  renderer.setBgColor('#050508');
+
+  // Load model
+  setLoadingStatus('Loading 3D eye model...');
+  try {
+    await renderer.loadModel('eye.glb');
+    console.log('Model loaded OK');
+  } catch (err) {
+    console.error('Model load failed:', err);
+    setLoadingStatus('Error: run with local server (python3 -m http.server 8080)');
+    return;
+  }
+
+  // Apply initial state — push ALL defaults to the renderer
+  const p = controller.params;
+  renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, p.cyclops > 0.5);
+  renderer.updateLighting(p.lightAngle, p.lightHeight, p.lightIntensity);
+  renderer.setMorphTarget('pupilSize', p.pupilSize);
+  renderer.setEyeballScale(p.eyeballScale);
+  renderer.setCorneaScale(p.corneaScale);
+  renderer.setSkinScale(p.skinScale);
+  renderer.setCorneaParam('reflectivity', p.corneaSpecular);
+  renderer.setCorneaParam('roughness', p.corneaRoughness);
+  renderer.setCorneaParam('clearcoatRoughness', p.corneaRoughness);
+  renderer.setCorneaParam('ior', p.corneaIor);
+  renderer.setCorneaParam('envMapIntensity', p.corneaEnv);
+  renderer.setCorneaParam('clearcoat', p.corneaClearcoat);
+  renderer.setCorneaParam('transmission', p.corneaTransmission);
+  renderer.setCorneaParam('thickness', p.corneaThickness);
+  renderer.setIrisRoughness(p.irisRoughness);
+  renderer.setIrisDepth(p.irisDepth);
+  renderer.setIrisParallax(p.irisParallax);
+  renderer.setLimbusOpacity(p.limbusOpacity);
+  renderer.setTearFilmOpacity(p.tearFilm);
+  renderer.setCatchLightOpacity(p.catchLight);
+  renderer.setScleraRoughness(p.scleraRoughness);
+  renderer.setScleraOpacity(p.scleraOpacity);
+  renderer.setEnvIntensity(p.envIntensity);
+  renderer.setBgColor(p.bgColor);
+  renderer.setEnvLight(!!p.envLight);
+  renderer.setLid3d(!!p.lid3d);
+  renderer.setLidSkinColor(p.lidSkinColor);
+  renderer.setLidLowerColor(p.lidLowerColor);
+  renderer.setLidEdgeColor(p.lidEdgeColor);
+  renderer.setLidRoughness(p.lidRoughness);
+  renderer.setLidSheen(p.lidSheen);
+  renderer.setLidClearcoat(p.lidClearcoat);
+  renderer.setLidShadowOpacity(p.lidShadow);
+  for (const eye of [renderer.left, renderer.right]) {
+    const b = eye?.lidWrap?.getObjectByName('eyebrow');
+    if (b) b.visible = !!p.browShow;
+  }
+  {
+    const effOpen = p.lidOpen * 1.0;
+    const upperAng = effOpen * 0.7 + p.lidUpperTilt;
+    const lowerAng = effOpen * p.lidLowerRatio * 0.7 + p.lidLowerTilt;
+    renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, p.cyclops > 0.5);
+  }
+  ui.init();
+
+  // Start tracking
+  setLoadingStatus('Initializing tracking...');
+  try {
+    await tracker.init();
+    document.getElementById('loading').classList.add('hidden');
+    setStatus('active', 'Face tracking active');
+  } catch (err) {
+    console.warn('Tracking fallback:', err.message);
+    document.getElementById('loading').classList.add('hidden');
+    setStatus('inactive', 'Pointer mode');
+    tracker.initPointerFallback();
+  }
+
+  // Render loop
+  function animate() {
+    requestAnimationFrame(animate);
+    const dt = renderer.clock.getDelta();
+    const p = controller.params;
+    const cyclops = p.cyclops > 0.5;
+
+    controller.update(dt);
+
+    const gaze = controller.getGaze();
+    renderer.setGaze(gaze.x, gaze.y, gaze.vergence, p.globeRotate, cyclops);
+
+    const ba = controller.getBlinkAmount();
+    const effOpen = p.lidOpen * (1.0 - ba);
+    const upperAng = effOpen * 0.7 + p.lidUpperTilt;
+    const lowerAng = effOpen * p.lidLowerRatio * 0.7 + p.lidLowerTilt;
+    renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, cyclops);
+
+    renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, cyclops);
+    renderer.updateLighting(p.lightAngle, p.lightHeight, p.lightIntensity);
+
+    renderer.updateEnvVideo();
+    renderer.render();
+  }
+  animate();
+}
+
+main();
+</script>
+</body>
+</html>

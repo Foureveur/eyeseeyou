@@ -1,0 +1,885 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
+<title>EyeSeeYou</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#000;overflow:hidden;font-family:'Space Mono',monospace;color:#fff;cursor:crosshair;touch-action:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none;}
+#canvas-container{width:100vw;height:100vh;height:100dvh;position:fixed;top:0;left:0;}
+#webcam-debug{position:fixed;bottom:16px;left:16px;width:180px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;z-index:100;display:none;opacity:0.6;}
+#panel{position:fixed;top:0;right:0;width:310px;height:100vh;height:100dvh;background:rgba(5,5,10,0.93);backdrop-filter:blur(14px);border-left:1px solid rgba(255,255,255,0.06);z-index:200;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 50px;font-size:11px;}
+#panel.open{transform:translateX(0);}
+#panel h3{font-size:9px;text-transform:uppercase;letter-spacing:3px;color:rgba(255,255,255,0.35);margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid rgba(255,255,255,0.05);}
+#panel h3:first-child{margin-top:0;}
+.pr{display:flex;align-items:center;margin:4px 0;gap:6px;}
+.pr label{flex:1;color:rgba(255,255,255,0.55);font-size:9px;}
+.pr input[type=range]{flex:1.5;accent-color:#556;height:2px;}
+.pr .v{width:34px;text-align:right;color:rgba(255,255,255,0.3);font-size:8px;font-family:'Space Mono',monospace;}
+.pr input[type=color]{width:24px;height:16px;border:1px solid rgba(255,255,255,0.12);background:none;cursor:pointer;border-radius:2px;padding:0;}
+#panel-toggle{position:fixed;top:14px;right:14px;z-index:300;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+/* Bottom bars */
+#bottombar{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:150;display:flex;gap:8px;align-items:center;}
+#emotions{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.emo-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:16px;width:34px;height:34px;border-radius:50%;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+.emo-btn:hover{background:rgba(255,255,255,0.1);transform:scale(1.12);}
+.emo-btn.active{background:rgba(255,255,255,0.15);border-color:rgba(255,255,255,0.4);}
+#modes{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.mode-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.6);font-size:8px;letter-spacing:1px;text-transform:uppercase;padding:6px 10px;border-radius:12px;cursor:pointer;transition:all 0.2s;font-family:'Space Mono',monospace;-webkit-tap-highlight-color:transparent;}
+.mode-btn:hover{background:rgba(255,255,255,0.08);}
+.mode-btn.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.35);color:#fff;}
+#loading{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;transition:opacity 0.8s;}
+#loading.hidden{opacity:0;pointer-events:none;}
+#loading h1{font-size:38px;letter-spacing:5px;margin-bottom:14px;}
+.le{width:9px;height:9px;background:#fff;border-radius:50%;display:inline-block;margin:0 3px;animation:bl 2s infinite;}
+.le:nth-child(2){animation-delay:0.15s;}
+@keyframes bl{0%,80%,100%{transform:scaleY(1);}90%{transform:scaleY(0.1);}}
+#loading-status{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.35);}
+#status{position:fixed;top:14px;left:14px;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.2);z-index:100;}
+.dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+.dot.active{background:#4f4;}.dot.inactive{background:#f44;}.dot.loading{background:#fa0;animation:pu 1s infinite;}
+@keyframes pu{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.ui-layer{transition:opacity 0.5s;}
+body.immersed .ui-layer{opacity:0;pointer-events:none;}
+body.immersed.ui-peek .ui-layer{opacity:1;pointer-events:auto;}
+#immerse-btn{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.5);font-size:8px;letter-spacing:2px;text-transform:uppercase;font-family:'Space Mono',monospace;padding:8px 16px;border-radius:14px;cursor:pointer;transition:all 0.3s;-webkit-tap-highlight-color:transparent;}
+#immerse-btn:hover{background:rgba(255,255,255,0.1);color:#fff;}
+body.immersed #immerse-btn{opacity:0;pointer-events:none;}
+body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
+@media(max-width:768px),(pointer:coarse){#panel{width:100%;}#bottombar{flex-direction:column;gap:5px;}}
+</style>
+</head>
+<body>
+<div id="loading"><h1>EYE<span class="le"></span><span class="le"></span>YOU</h1><div id="loading-status">Initializing...</div></div>
+<div id="canvas-container"></div>
+<video id="webcam-debug" autoplay playsinline muted></video>
+<div id="panel-toggle" class="ui-layer">&#9881;</div>
+<div id="immerse-btn" class="ui-layer">Immerse</div>
+<div id="panel" class="ui-layer">
+  <h3>Iris</h3>
+  <div class="pr"><label>Color</label><input type="color" id="p-irisColor" value="#4a8a50"><span class="v"></span></div>
+  <div class="pr"><label>Size</label><input type="range" id="p-irisSize" min="0.18" max="0.5" step="0.01" value="0.36"><span class="v">0.36</span></div>
+  <div class="pr"><label>Pupil</label><input type="range" id="p-pupilSize" min="0.04" max="0.22" step="0.01" value="0.16"><span class="v">0.16</span></div>
+  <div class="pr"><label>Pupil React</label><input type="range" id="p-pupilReact" min="0" max="1" step="0.05" value="0.50"><span class="v">0.50</span></div>
+  <div class="pr"><label>Limbus</label><input type="range" id="p-limbusWidth" min="0" max="0.12" step="0.005" value="0.03"><span class="v">0.03</span></div>
+  <div class="pr"><label>Detail</label><input type="range" id="p-irisDetail" min="0" max="1" step="0.05" value="0.8"><span class="v">0.80</span></div>
+  <div class="pr"><label>Refraction</label><input type="range" id="p-refraction" min="0" max="0.25" step="0.01" value="0.00"><span class="v">0.00</span></div>
+  <h3>Sclera</h3>
+  <div class="pr"><label>Brightness</label><input type="range" id="p-scleraBright" min="0.6" max="1" step="0.01" value="0.97"><span class="v">0.97</span></div>
+  <div class="pr"><label>Veins</label><input type="range" id="p-veinIntensity" min="0" max="1" step="0.05" value="0.25"><span class="v">0.25</span></div>
+  <div class="pr"><label>SSS</label><input type="range" id="p-sss" min="0" max="1" step="0.05" value="1.00"><span class="v">1.00</span></div>
+  <div class="pr"><label>Edge AO</label><input type="range" id="p-edgeAO" min="0" max="1" step="0.05" value="0.30"><span class="v">0.30</span></div>
+  <h3>Cornea</h3>
+  <div class="pr"><label>Specular</label><input type="range" id="p-specular" min="0" max="2" step="0.05" value="2.00"><span class="v">2.00</span></div>
+  <div class="pr"><label>Roughness</label><input type="range" id="p-roughness" min="0" max="0.5" step="0.01" value="0.05"><span class="v">0.05</span></div>
+  <div class="pr"><label>Moisture</label><input type="range" id="p-moisture" min="0" max="1" step="0.05" value="1.00"><span class="v">1.00</span></div>
+  <h3>Eyelids</h3>
+  <div class="pr"><label>Openness</label><input type="range" id="p-lidOpen" min="0" max="1.5" step="0.01" value="0.43"><span class="v">0.43</span></div>
+  <div class="pr"><label>Upper Tilt</label><input type="range" id="p-lidUpperTilt" min="-0.4" max="0.4" step="0.01" value="-0.22"><span class="v">-0.22</span></div>
+  <div class="pr"><label>Lower Tilt</label><input type="range" id="p-lidLowerTilt" min="-0.4" max="0.4" step="0.01" value="-0.02"><span class="v">-0.02</span></div>
+  <div class="pr"><label>Slant</label><input type="range" id="p-lidSlant" min="-0.5" max="0.5" step="0.01" value="0.01"><span class="v">0.01</span></div>
+  <div class="pr"><label>Width</label><input type="range" id="p-lidWidth" min="0.7" max="1.4" step="0.01" value="1.08"><span class="v">1.08</span></div>
+  <div class="pr"><label>Thickness</label><input type="range" id="p-lidThickness" min="0" max="2" step="0.05" value="0.25"><span class="v">0.25</span></div>
+  <div class="pr"><label>Crease</label><input type="range" id="p-lidCrease" min="0" max="1" step="0.05" value="0.35"><span class="v">0.35</span></div>
+  <div class="pr"><label>Shadow</label><input type="range" id="p-lidShadow" min="0" max="1" step="0.05" value="0.55"><span class="v">0.55</span></div>
+  <div class="pr"><label>Lower Ratio</label><input type="range" id="p-lidLowerRatio" min="0" max="0.6" step="0.01" value="0.60"><span class="v">0.60</span></div>
+  <h3>Eyes — Layout</h3>
+  <div class="pr"><label>Scale</label><input type="range" id="p-eyeScale" min="0.4" max="2.5" step="0.05" value="1.15"><span class="v">1.15</span></div>
+  <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
+  <h3>Tracking</h3>
+  <div class="pr"><label>Smoothing</label><input type="range" id="p-smoothing" min="0.02" max="0.25" step="0.01" value="0.07"><span class="v">0.07</span></div>
+  <div class="pr"><label>Sensitivity</label><input type="range" id="p-sensitivity" min="0.3" max="2" step="0.05" value="1"><span class="v">1.00</span></div>
+  <div class="pr"><label>Max Travel</label><input type="range" id="p-maxTravel" min="0.1" max="0.9" step="0.01" value="0.42"><span class="v">0.42</span></div>
+  <div class="pr"><label>Globe Rotate</label><input type="range" id="p-globeRotate" min="0" max="1" step="0.05" value="0.4"><span class="v">0.40</span></div>
+  <h3>Parallax</h3>
+  <div class="pr"><label>Offset X</label><input type="range" id="p-parallaxX" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Offset Y</label><input type="range" id="p-parallaxY" min="-0.5" max="0.5" step="0.01" value="-0.08"><span class="v">-0.08</span></div>
+  <h3>Vergence</h3>
+  <div class="pr"><label>Base</label><input type="range" id="p-vergenceBase" min="0" max="0.12" step="0.005" value="0.04"><span class="v">0.04</span></div>
+  <div class="pr"><label>Max Cross</label><input type="range" id="p-vergenceMax" min="0" max="0.5" step="0.01" value="0.3"><span class="v">0.30</span></div>
+  <h3>Environment</h3>
+  <div class="pr"><label>BG</label><input type="color" id="p-bgColor" value="#050508"><span class="v"></span></div>
+  <div class="pr"><label>Light Angle</label><input type="range" id="p-lightAngle" min="0" max="6.28" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Light Height</label><input type="range" id="p-lightHeight" min="-1" max="3" step="0.05" value="0.05"><span class="v">0.05</span></div>
+</div>
+<div id="bottombar" class="ui-layer">
+  <div id="emotions">
+    <button class="emo-btn active" data-emo="neutral" title="Neutral">😐</button>
+    <button class="emo-btn" data-emo="joy" title="Joy">😊</button>
+    <button class="emo-btn" data-emo="anger" title="Anger">😠</button>
+    <button class="emo-btn" data-emo="fear" title="Fear">😨</button>
+    <button class="emo-btn" data-emo="sadness" title="Sadness">😢</button>
+    <button class="emo-btn" data-emo="surprise" title="Surprise">😲</button>
+    <button class="emo-btn" data-emo="contempt" title="Contempt">😒</button>
+  </div>
+  <div id="modes">
+    <button class="mode-btn active" data-mode="continuous">Track</button>
+    <button class="mode-btn" data-mode="motion">Motion</button>
+    <button class="mode-btn" data-mode="jumpscare">Lurk</button>
+  </div>
+  <div id="version-toggle" style="display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;">
+    <button class="mode-btn active" data-version="v1">V1 Shader</button>
+    <button class="mode-btn" data-version="v2">V2 Model</button>
+  </div>
+</div>
+<div id="status" class="ui-layer"><span class="dot loading" id="status-dot"></span><span id="status-text">Loading...</span></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
+<script id="eyeVS" type="x-shader/x-vertex">
+uniform vec2 uGazeOffset;
+varying vec3 vNormal,vViewDir,vLocalPos;varying vec2 vGaze;
+void main(){vLocalPos=position;vGaze=uGazeOffset;vNormal=normalize(normalMatrix*normal);vec4 wp=modelMatrix*vec4(position,1.0);vViewDir=normalize(cameraPosition-wp.xyz);gl_Position=projectionMatrix*viewMatrix*wp;}
+</script>
+
+<script id="eyeFS" type="x-shader/x-fragment">
+precision highp float;
+varying vec3 vNormal,vViewDir,vLocalPos;varying vec2 vGaze;
+uniform vec3 uIrisColor,uLightDir;
+uniform float uIrisSize,uPupilSize,uPupilReact,uLimbusWidth,uIrisDetail;
+uniform float uRefraction,uScleraBright,uVeinIntensity,uSSS;
+uniform float uSpecular,uRoughness,uMoisture,uTime;
+uniform float uLidShadow,uLidCrease,uUpperLidY,uLowerLidY,uEdgeAO;
+
+float hash(vec2 p){return fract(sin(dot(p,vec2(127.1,311.7)))*43758.5453);}
+float noise(vec2 p){vec2 i=floor(p),f=fract(p);f=f*f*(3.0-2.0*f);return mix(mix(hash(i),hash(i+vec2(1,0)),f.x),mix(hash(i+vec2(0,1)),hash(i+vec2(1,1)),f.x),f.y);}
+float fbm(vec2 p){float v=0.0,a=0.5;for(int i=0;i<6;i++){v+=a*noise(p);p*=2.03;a*=0.49;}return v;}
+
+void main(){
+  vec3 n=normalize(vLocalPos);
+  vec3 N=normalize(vNormal);
+  vec3 V=normalize(vViewDir);
+  vec3 L=normalize(uLightDir);
+
+  // === GAZE OFFSET ===
+  vec2 irisCenter=vGaze*0.42;
+  vec2 toIris=n.xy-irisCenter;
+  float dist=length(toIris);
+
+  // Pupil pulsation
+  float pulsing=1.0-uPupilReact*0.18*(0.5+0.5*sin(uTime*0.7+0.3*sin(uTime*1.1)));
+  float pupilR=uPupilSize*pulsing;
+  float limbusOuter=uIrisSize+uLimbusWidth;
+
+  // Cornea refraction — bends UV toward center over iris area
+  vec2 rxy=toIris;
+  if(dist<limbusOuter+0.06){
+    float rs=uRefraction*smoothstep(limbusOuter+0.06,uIrisSize*0.35,dist);
+    rxy*=(1.0+rs);
+  }
+  float dr=length(rxy);
+
+  vec3 color;
+
+  if(dr<limbusOuter){
+    // ===================== IRIS =====================
+    float r=dr/uIrisSize; // 0=center, 1=edge
+    float a=atan(rxy.y,rxy.x);
+
+    // --- Stroma fibers (radial structure) ---
+    float fib=0.0;
+    if(uIrisDetail>0.0){
+      // Primary radial fibers — slightly wavy
+      float waveA=a+0.15*sin(r*12.0+a*3.0); // wobble
+      fib+=0.09*sin(waveA*30.0);
+      fib+=0.055*sin(waveA*68.0+1.6);
+      fib+=0.03*sin(waveA*110.0+3.8);
+      // Noise-based fiber variation
+      fib+=0.14*noise(vec2(a*9.0,r*16.0));
+      // Deep stroma texture (FBM)
+      fib+=0.11*smoothstep(0.45,0.95,fbm(vec2(20.0*a,8.0*r*pulsing)));
+      // Radial spokes — thicker, more organic
+      float spoke=pow(abs(sin(a*16.0+fbm(vec2(a*3.0,r*5.0))*1.5)),3.0)*0.12;
+      fib+=spoke*smoothstep(0.25,0.65,r);
+      fib*=uIrisDetail;
+    }
+
+    // --- Color layers ---
+    vec3 iDark=uIrisColor*0.18;
+    vec3 iMid=uIrisColor;
+    vec3 iLight=uIrisColor*1.35+vec3(0.08,0.06,0.02);
+    // Warm amber ring close to pupil (Fuchs pigment ring)
+    vec3 iFuchs=uIrisColor*0.7+vec3(0.18,0.08,0.0);
+
+    // Base: radial gradient from light center to dark edge
+    float cm=smoothstep(0.1,0.82,r)+fib;
+    vec3 iris=mix(iLight,iDark,clamp(cm,0.0,1.0));
+
+    // Fuchs ring — thin warm band right around pupil
+    float fuchsRing=smoothstep(0.08,0.18,r)*(1.0-smoothstep(0.22,0.32,r));
+    iris=mix(iris,iFuchs,fuchsRing*0.5*uIrisDetail);
+
+    // Collarette — bright structural ring at mid-iris
+    float coll=smoothstep(0.28,0.38,r)*(1.0-smoothstep(0.42,0.52,r));
+    iris=mix(iris,iLight*1.2,coll*0.3*uIrisDetail);
+
+    // Crypts — irregular dark hollows
+    float crypts=fbm(vec2(a*5.5+2.5,r*15.0));
+    iris*=1.0-smoothstep(0.38,0.68,crypts)*0.22*uIrisDetail;
+
+    // Dark insertions
+    float darkIns=fbm(vec2(16.0*a+1.0,11.0*r*pulsing));
+    iris*=1.0-0.2*smoothstep(0.4,0.88,darkIns)*uIrisDetail;
+
+    // Iris depth — concavity darkening (iris is a bowl, deeper = darker)
+    iris*=0.92+0.08*(1.0-r);
+
+    // --- Pupil ---
+    // Soft brown/amber edge instead of hard black cut
+    float pupilMask=1.0-smoothstep(pupilR-0.015,pupilR+0.006,dr);
+    float pupilEdge=smoothstep(pupilR-0.02,pupilR-0.005,dr)*(1.0-smoothstep(pupilR-0.005,pupilR+0.006,dr));
+    vec3 pupilEdgeCol=uIrisColor*0.3+vec3(0.06,0.03,0.0);
+    iris=mix(iris,pupilEdgeCol,pupilEdge*0.6);
+    iris=mix(iris,vec3(0.002),pupilMask);
+
+    // --- Limbus darkening ---
+    float limbus=smoothstep(uIrisSize-uLimbusWidth*1.2,uIrisSize,dr);
+    iris*=1.0-limbus*0.6;
+    // Subtle vignette
+    iris*=1.0-0.1*smoothstep(0.5,0.88,r);
+
+    // Blend to sclera at outer edge
+    float outerFade=smoothstep(uIrisSize,limbusOuter,dr);
+    vec3 scleraBase=vec3(uScleraBright)*vec3(1.0,0.985,0.96);
+    color=mix(iris,scleraBase,outerFade);
+
+    // Cornea specular over iris (sharp, not on pupil)
+    float corneaSpec=pow(max(dot(reflect(-L,N),V),0.0),mix(350.0,30.0,uRoughness));
+    color+=vec3(1.0)*corneaSpec*uSpecular*0.45*(1.0-pupilMask);
+
+  } else {
+    // ===================== SCLERA =====================
+    float fullDist=length(n.xy);
+    vec3 sc=vec3(uScleraBright)*vec3(1.0,0.985,0.96);
+
+    // Slight blue tint at center (thinnest part, more translucent)
+    sc=mix(sc,sc*vec3(0.97,0.98,1.02),smoothstep(0.5,0.15,fullDist)*0.3);
+
+    // Veins
+    if(uVeinIntensity>0.0){
+      float ef=smoothstep(0.25,0.8,fullDist);
+      vec3 vc=vec3(0.62,0.09,0.06);
+      // Main veins
+      sc=mix(sc,vc,smoothstep(0.38,0.52,fbm(n.xy*14.0+vec2(3.7,1.2)))*ef*uVeinIntensity*0.32);
+      // Secondary veins
+      sc=mix(sc,vc*0.65,smoothstep(0.42,0.52,fbm(n.xy*36.0+vec2(7.1,2.3)))*ef*uVeinIntensity*0.16);
+      // Micro capillaries
+      sc=mix(sc,vc*0.5,smoothstep(0.47,0.53,fbm(n.xy*65.0+vec2(1.3,5.7)))*ef*uVeinIntensity*0.07);
+    }
+
+    // Edge AO with warm reddening (controllable)
+    float edgeAO=smoothstep(0.4,0.92,fullDist);
+    sc*=1.0-edgeAO*uEdgeAO*0.5;
+    sc=mix(sc,sc*vec3(1.04,0.94,0.92),edgeAO*uEdgeAO*0.25); // pinkish at edges
+
+    // SSS — warm light through sclera
+    if(uSSS>0.0){
+      float sssAmt=max(dot(-N,L),0.0);
+      sc+=vec3(0.48,0.09,0.04)*sssAmt*uSSS*0.22;
+    }
+
+    color=sc;
+  }
+
+  // ===================== LID SHADOWS (param-driven only) =====================
+  // These only appear when uLidShadow > 0, fully controllable via panel
+
+  // ===================== GLOBAL LIGHTING =====================
+  float NdL=max(dot(N,L),0.0);
+  float wrap=NdL*0.52+0.48; // wrap lighting
+  color*=wrap;
+
+  // Main specular (sharp)
+  vec3 H=normalize(L+V);
+  float specSharp=pow(max(dot(N,H),0.0),mix(450.0,18.0,uRoughness));
+  color+=vec3(1.0)*specSharp*uSpecular*0.85;
+
+  // Secondary broad specular (soft wet sheen)
+  float specBroad=pow(max(dot(N,H),0.0),12.0);
+  color+=vec3(0.95,0.97,1.0)*specBroad*uMoisture*0.08;
+
+  // Fresnel — slightly warm tint
+  float fres=pow(1.0-max(dot(N,V),0.0),3.8);
+  color+=vec3(0.85,0.9,1.0)*fres*uMoisture*0.18;
+  // Extra thin fresnel for cornea wet look
+  float fresThin=pow(1.0-max(dot(N,V),0.0),6.0);
+  color+=vec3(1.0)*fresThin*uSpecular*0.06;
+
+  // Tear film line at bottom
+  float tearLine=smoothstep(-0.33,-0.28,n.y)*smoothstep(-0.24,-0.30,n.y);
+  color+=vec3(1.0,0.98,0.96)*tearLine*uMoisture*0.07;
+
+  gl_FragColor=vec4(color,1.0);
+}
+</script>
+
+<script>
+const isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.maxTouchPoints>0&&innerWidth<1024);
+const R=0.65;
+
+// === TUNED DEFAULTS for realism ===
+const P={
+  irisColor:new THREE.Color(0x4a8a50),irisSize:0.36,pupilSize:0.16,pupilReact:0.50,
+  limbusWidth:0.03,irisDetail:0.8,refraction:0.0,
+  scleraBright:0.97,veinIntensity:0.25,sss:1.0,edgeAO:0.3,
+  specular:2.0,roughness:0.05,moisture:1.0,
+  lidOpen:0.43,lidUpperTilt:-0.22,lidLowerTilt:-0.02,lidSlant:0.01,
+  lidWidth:1.08,lidThickness:0.25,lidCrease:0.35,lidShadow:0.55,lidLowerRatio:0.60,
+  eyeScale:1.15,eyeSpacing:1.8,eyeTilt:0,cyclops:0,
+  smoothing:0.07,sensitivity:1.0,maxTravel:0.42,globeRotate:0.4,
+  parallaxX:0,parallaxY:-0.08,
+  vergenceBase:0.04,vergenceMax:0.3,
+  bgColor:new THREE.Color(0x050508),lightAngle:1.8,lightHeight:0.05,
+};
+
+const S={
+  faceTargetX:0,faceTargetY:0,faceTargetZ:0.5,
+  targetX:0,targetY:0,targetZ:0.5,
+  currentX:0,currentY:0,currentZ:0.5,currentVergence:0,
+  blinkProgress:0,isBlinking:false,
+  faceDetected:false,lastFaceTime:0,microTimer:0,
+  currentEmotion:'neutral',gazeMode:'continuous',
+  emoLidOpen:0.43,emoLidUpperTilt:-0.22,emoLidLowerTilt:-0.02,emoLidSlant:0.01,
+  emoPupilSize:0.16,emoLidLowerRatio:0.60,emoLidWidth:1.08,
+  // Motion mode
+  lastMotionX:0,lastMotionY:0,motionTriggered:false,motionDecay:0,
+  // Jumpscare mode
+  lurkTimer:0,lurkLooking:false,lurkCooldown:0,lurkTarget:{x:0,y:0},
+};
+
+const EMOTIONS={
+  neutral:{lidOpen:0.43,lidUpperTilt:-0.22,lidLowerTilt:-0.02,lidSlant:0.01,pupilSize:0.16,lidLowerRatio:0.60,lidWidth:1.08},
+  joy:{lidOpen:0.62,lidUpperTilt:0.06,lidLowerTilt:0.14,lidSlant:0.08,pupilSize:0.13,lidLowerRatio:0.38,lidWidth:1.12},
+  anger:{lidOpen:0.52,lidUpperTilt:-0.22,lidLowerTilt:0.12,lidSlant:-0.14,pupilSize:0.07,lidLowerRatio:0.32,lidWidth:1.02},
+  fear:{lidOpen:1.25,lidUpperTilt:0.14,lidLowerTilt:-0.1,lidSlant:0,pupilSize:0.055,lidLowerRatio:0.12,lidWidth:1.1},
+  sadness:{lidOpen:0.58,lidUpperTilt:-0.12,lidLowerTilt:-0.04,lidSlant:0.12,pupilSize:0.12,lidLowerRatio:0.18,lidWidth:0.98},
+  surprise:{lidOpen:1.35,lidUpperTilt:0.1,lidLowerTilt:-0.14,lidSlant:0,pupilSize:0.065,lidLowerRatio:0.08,lidWidth:1.18},
+  contempt:{lidOpen:0.68,lidUpperTilt:-0.06,lidLowerTilt:0.06,lidSlant:-0.2,pupilSize:0.10,lidLowerRatio:0.28,lidWidth:0.98},
+};
+
+let scene,camera,renderer,leftG,rightG,eyeMatL,eyeMatR,eyeGroup,clock=new THREE.Clock();
+
+function makeEyeMat(){
+  return new THREE.ShaderMaterial({
+    vertexShader:document.getElementById('eyeVS').textContent,
+    fragmentShader:document.getElementById('eyeFS').textContent,
+    uniforms:{
+      uGazeOffset:{value:new THREE.Vector2(0,0)},
+      uIrisColor:{value:P.irisColor.clone()},uIrisSize:{value:P.irisSize},
+      uPupilSize:{value:P.pupilSize},uPupilReact:{value:P.pupilReact},
+      uLimbusWidth:{value:P.limbusWidth},uIrisDetail:{value:P.irisDetail},
+      uRefraction:{value:P.refraction},uScleraBright:{value:P.scleraBright},
+      uVeinIntensity:{value:P.veinIntensity},uSSS:{value:P.sss},
+      uSpecular:{value:P.specular},uRoughness:{value:P.roughness},
+      uMoisture:{value:P.moisture},
+      uLightDir:{value:new THREE.Vector3(0.5,1.8,0.6).normalize()},
+      uTime:{value:0},
+      uLidShadow:{value:P.lidShadow},uLidCrease:{value:P.lidCrease},
+      uUpperLidY:{value:0.3},uLowerLidY:{value:-0.3},uEdgeAO:{value:P.edgeAO},
+    },
+  });
+}
+
+let envMap=null;
+
+function createEnvMap(){
+  // Procedural environment map — simulates a studio/room HDRI
+  const pmrem=new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const envScene=new THREE.Scene();
+  // Soft ambient fill
+  envScene.add(new THREE.AmbientLight(0xddeeff,0.4));
+  // Key light — warm, from upper right (simulates window)
+  const key=new THREE.DirectionalLight(0xfff4e0,1.8);
+  key.position.set(3,4,5);envScene.add(key);
+  // Fill light — cool, from left
+  const fill=new THREE.DirectionalLight(0xc0d8ff,0.6);
+  fill.position.set(-4,1,3);envScene.add(fill);
+  // Rim light — from behind
+  const rim=new THREE.DirectionalLight(0xffffff,0.4);
+  rim.position.set(0,2,-5);envScene.add(rim);
+  // A bright plane to simulate window reflection
+  const windowGeo=new THREE.PlaneGeometry(6,4);
+  const windowMat=new THREE.MeshBasicMaterial({color:0xffffff});
+  const windowMesh=new THREE.Mesh(windowGeo,windowMat);
+  windowMesh.position.set(0,2,8);envScene.add(windowMesh);
+  // A smaller secondary reflection
+  const win2=new THREE.Mesh(new THREE.PlaneGeometry(2,1.5),new THREE.MeshBasicMaterial({color:0xaabbcc}));
+  win2.position.set(-3,1,6);win2.rotation.y=0.3;envScene.add(win2);
+  // Generate
+  envMap=pmrem.fromScene(envScene,0,0.1,100).texture;
+  pmrem.dispose();
+}
+
+function initThree(){
+  scene=new THREE.Scene();scene.background=P.bgColor;
+  camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,0.1,100);
+  camera.position.z=5;
+  renderer=new THREE.WebGLRenderer({antialias:!isMobile});
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,isMobile?1.5:2));
+  renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure=1.05;
+  renderer.outputEncoding=THREE.sRGBEncoding;
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+
+  // Create environment map for reflections
+  createEnvMap();
+
+  eyeMatL=makeEyeMat();eyeMatR=makeEyeMat();
+  eyeGroup=new THREE.Group();
+  leftG=createEye(eyeMatL);rightG=createEye(eyeMatR);
+  eyeGroup.add(leftG);eyeGroup.add(rightG);
+  scene.add(eyeGroup);
+  updateLayout();
+  addEventListener('resize',onResize);
+}
+
+function createEye(mat){
+  const g=new THREE.Group(),d=isMobile?48:64;
+  const pivot=new THREE.Group();pivot.name='pivot';
+  pivot.add(Object.assign(new THREE.Mesh(new THREE.SphereGeometry(R,d,d),mat),{name:'eyeball'}));
+
+  // === CORNEA — proper refractive shell with environment reflections ===
+  const corneaMat=new THREE.MeshPhysicalMaterial({
+    color:0xffffff,
+    transparent:true,
+    opacity:0.15,
+    roughness:0.02,
+    metalness:0,
+    clearcoat:1.0,
+    clearcoatRoughness:0.01,
+    envMap:envMap,
+    envMapIntensity:1.2,
+    depthWrite:false,
+    side:THREE.FrontSide,
+  });
+  // Full front hemisphere cornea — slightly larger than globe
+  const corneaGeo=new THREE.SphereGeometry(R*1.012,d,d,0,Math.PI*2,0,Math.PI*0.45);
+  const cornea=new THREE.Mesh(corneaGeo,corneaMat);
+  cornea.name='cornea';
+  pivot.add(cornea);
+
+  g.add(pivot);
+
+  const lidWrap=new THREE.Group();lidWrap.name='lidWrap';
+  const lidMat=new THREE.MeshBasicMaterial({color:0x000000,side:THREE.FrontSide});
+
+  // Lids: radius significantly larger than globe so they always cover edges
+  const lidR=R*1.15;
+
+  // Upper lid
+  const ul=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,0,Math.PI*0.5),lidMat);
+  ul.name='upperLid';lidWrap.add(ul);
+
+  // Lower lid
+  const ll=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,Math.PI*0.5,Math.PI*0.5),lidMat.clone());
+  ll.name='lowerLid';lidWrap.add(ll);
+
+  g.add(lidWrap);
+
+  // Back cap — large enough to cover everything behind
+  g.add(Object.assign(new THREE.Mesh(
+    new THREE.SphereGeometry(lidR*1.01,d/2,d/2,0,Math.PI*2,Math.PI*0.3,Math.PI*0.7),
+    new THREE.MeshBasicMaterial({color:0x000000,side:THREE.BackSide})
+  ),{name:'backCap'}));
+
+  return g;
+}
+
+function updateLayout(){
+  const s=P.eyeSpacing/2;
+  if(P.cyclops>0.5){
+    leftG.visible=true;rightG.visible=false;
+    leftG.position.set(0,0,0);
+    leftG.scale.setScalar(P.eyeScale*(1+P.cyclops*0.3));
+  } else {
+    leftG.visible=true;rightG.visible=true;
+    leftG.position.set(-s,0,0);rightG.position.set(s,0,0);
+    leftG.scale.setScalar(P.eyeScale);rightG.scale.setScalar(P.eyeScale);
+  }
+  eyeGroup.rotation.z=P.eyeTilt;
+}
+
+// ============================================================
+// PANEL
+// ============================================================
+function initPanel(){
+  document.getElementById('panel-toggle').addEventListener('click',()=>document.getElementById('panel').classList.toggle('open'));
+  document.querySelectorAll('#panel input[type=range]').forEach(inp=>{
+    const vs=inp.parentElement.querySelector('.v');
+    inp.addEventListener('input',()=>{vs.textContent=parseFloat(inp.value).toFixed(2);applyP(inp.id,parseFloat(inp.value));});
+  });
+  document.querySelectorAll('#panel input[type=color]').forEach(inp=>{inp.addEventListener('input',()=>applyP(inp.id,inp.value));});
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Tab'){e.preventDefault();document.getElementById('panel').classList.toggle('open');}
+    if(e.key==='f'||e.key==='F')toggleFS();
+    if(e.key==='d'||e.key==='D'){const v=document.getElementById('webcam-debug');v.style.display=v.style.display==='none'?'block':'none';}
+  });
+  document.querySelectorAll('.emo-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.emo-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');applyEmotion(btn.dataset.emo);});});
+  document.querySelectorAll('.mode-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');S.gazeMode=btn.dataset.mode;});});
+  // Immerse mode
+  let immerseTO=null;
+  document.getElementById('immerse-btn').addEventListener('click',()=>{
+    document.body.classList.add('immersed');
+    try{const el=document.documentElement;if(el.requestFullscreen)el.requestFullscreen();else if(el.webkitRequestFullscreen)el.webkitRequestFullscreen();}catch(e){}
+  });
+  function peekUI(){
+    if(!document.body.classList.contains('immersed'))return;
+    document.body.classList.add('ui-peek');
+    clearTimeout(immerseTO);
+    immerseTO=setTimeout(()=>document.body.classList.remove('ui-peek'),2500);
+  }
+  document.addEventListener('mousemove',peekUI);
+  document.addEventListener('touchstart',peekUI);
+  document.addEventListener('keydown',e2=>{if(e2.key==='Escape')document.body.classList.remove('immersed','ui-peek');});
+}
+
+function uBoth(n,v){eyeMatL.uniforms[n].value=v;eyeMatR.uniforms[n].value=v;}
+function applyP(id,val){
+  const m={
+    'p-irisColor':()=>{P.irisColor.set(val);uBoth('uIrisColor',P.irisColor.clone());},'p-irisSize':()=>{P.irisSize=val;uBoth('uIrisSize',val);},'p-pupilSize':()=>{P.pupilSize=val;S.emoPupilSize=val;uBoth('uPupilSize',val);},'p-pupilReact':()=>{P.pupilReact=val;uBoth('uPupilReact',val);},'p-limbusWidth':()=>{P.limbusWidth=val;uBoth('uLimbusWidth',val);},'p-irisDetail':()=>{P.irisDetail=val;uBoth('uIrisDetail',val);},'p-refraction':()=>{P.refraction=val;uBoth('uRefraction',val);},'p-scleraBright':()=>{P.scleraBright=val;uBoth('uScleraBright',val);},'p-veinIntensity':()=>{P.veinIntensity=val;uBoth('uVeinIntensity',val);},'p-sss':()=>{P.sss=val;uBoth('uSSS',val);},'p-edgeAO':()=>{P.edgeAO=val;uBoth('uEdgeAO',val);},'p-specular':()=>{P.specular=val;uBoth('uSpecular',val);},'p-roughness':()=>{P.roughness=val;uBoth('uRoughness',val);},'p-moisture':()=>{P.moisture=val;uBoth('uMoisture',val);},
+    'p-lidOpen':()=>{P.lidOpen=val;S.emoLidOpen=val;},'p-lidUpperTilt':()=>{P.lidUpperTilt=val;S.emoLidUpperTilt=val;},'p-lidLowerTilt':()=>{P.lidLowerTilt=val;S.emoLidLowerTilt=val;},'p-lidSlant':()=>{P.lidSlant=val;S.emoLidSlant=val;},'p-lidWidth':()=>{P.lidWidth=val;S.emoLidWidth=val;},'p-lidThickness':()=>P.lidThickness=val,
+    'p-lidCrease':()=>{P.lidCrease=val;uBoth('uLidCrease',val);},'p-lidShadow':()=>{P.lidShadow=val;uBoth('uLidShadow',val);},'p-lidLowerRatio':()=>{P.lidLowerRatio=val;S.emoLidLowerRatio=val;},
+    'p-eyeScale':()=>{P.eyeScale=val;updateLayout();},'p-eyeSpacing':()=>{P.eyeSpacing=val;updateLayout();},'p-eyeTilt':()=>{P.eyeTilt=val;updateLayout();},'p-cyclops':()=>{P.cyclops=val;updateLayout();},
+    'p-smoothing':()=>P.smoothing=val,'p-sensitivity':()=>P.sensitivity=val,'p-maxTravel':()=>P.maxTravel=val,'p-globeRotate':()=>P.globeRotate=val,
+    'p-parallaxX':()=>P.parallaxX=val,'p-parallaxY':()=>P.parallaxY=val,
+    'p-vergenceBase':()=>P.vergenceBase=val,'p-vergenceMax':()=>P.vergenceMax=val,
+    'p-bgColor':()=>{P.bgColor.set(val);scene.background=P.bgColor;},'p-lightAngle':()=>{P.lightAngle=val;updLight();},'p-lightHeight':()=>{P.lightHeight=val;updLight();},
+  };
+  if(m[id])m[id]();
+}
+function updLight(){const v=new THREE.Vector3(Math.cos(P.lightAngle),P.lightHeight,Math.sin(P.lightAngle)).normalize();eyeMatL.uniforms.uLightDir.value.copy(v);eyeMatR.uniforms.uLightDir.value.copy(v);}
+function applyEmotion(name){const e=EMOTIONS[name];if(!e)return;S.currentEmotion=name;S.emoLidOpen=e.lidOpen;S.emoLidUpperTilt=e.lidUpperTilt;S.emoLidLowerTilt=e.lidLowerTilt;S.emoLidSlant=e.lidSlant;S.emoPupilSize=e.pupilSize;S.emoLidLowerRatio=e.lidLowerRatio;S.emoLidWidth=e.lidWidth;}
+
+// ============================================================
+// TRACKING
+// ============================================================
+let bfModel=null,video=null,lastTT=0;const trackInt=isMobile?50:33;
+async function initTracking(){
+  const s=document.getElementById('loading-status');
+  try{
+    s.textContent='Loading face detection...';
+    if(typeof tf==='undefined'||typeof blazeface==='undefined')throw new Error('Scripts not loaded');
+    try{await tf.setBackend('webgl');}catch(e){}await tf.ready();
+    bfModel=await blazeface.load();s.textContent='Requesting camera...';
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:isMobile?320:480},height:{ideal:isMobile?240:360},facingMode:'user',...(isMobile?{frameRate:{ideal:20}}:{})},audio:false});
+    video=document.getElementById('webcam-debug');video.srcObject=stream;video.setAttribute('playsinline','');
+    await new Promise(r=>video.onloadedmetadata=r);
+    try{await video.play();}catch(e){document.addEventListener('touchstart',async()=>{await video.play();},{once:true});}
+    document.getElementById('loading').classList.add('hidden');setStatus('active','Face tracking active');
+    if('wakeLock'in navigator)try{await navigator.wakeLock.request('screen');}catch(e){}
+    trackLoop();
+  }catch(err){console.warn('Tracking:',err.message);s.textContent='Pointer mode';document.getElementById('loading').classList.add('hidden');setStatus('inactive','Pointer mode');initPointerFallback();}
+}
+function trackLoop(){
+  if(!bfModel||!video||video.readyState<2){requestAnimationFrame(trackLoop);return;}
+  const now=performance.now();if(now-lastTT<trackInt){requestAnimationFrame(trackLoop);return;}lastTT=now;
+  bfModel.estimateFaces(video,false).then(p=>{
+    if(p.length>0){
+      const f=p[0],re=f.landmarks[0],le=f.landmarks[1];
+      const cx=(re[0]+le[0])/2/video.videoWidth,cy=(re[1]+le[1])/2/video.videoHeight;
+      const ed=Math.sqrt(Math.pow((re[0]-le[0])/video.videoWidth,2)+Math.pow((re[1]-le[1])/video.videoHeight,2));
+      S.faceTargetX=-(cx*2-1)*P.sensitivity+P.parallaxX;S.faceTargetY=-(cy*2-1)*P.sensitivity+P.parallaxY;
+      S.faceTargetZ=Math.min(1.0,ed*4.0);S.faceDetected=true;S.lastFaceTime=now;setStatus('active','Tracking');
+    }else{if(S.faceDetected&&now-S.lastFaceTime>500){S.faceDetected=false;setStatus('inactive','No face');}}
+  }).catch(()=>{});requestAnimationFrame(trackLoop);
+}
+function initPointerFallback(){
+  const h=(x,y)=>{S.faceTargetX=(x/innerWidth*2-1)*P.sensitivity+P.parallaxX;S.faceTargetY=-(y/innerHeight*2-1)*P.sensitivity+P.parallaxY;S.faceTargetZ=0.5;S.faceDetected=true;S.lastFaceTime=performance.now();};
+  document.addEventListener('mousemove',e=>h(e.clientX,e.clientY));
+  document.addEventListener('touchmove',e=>{e.preventDefault();h(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+  document.addEventListener('touchstart',e=>h(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+  document.addEventListener('touchend',()=>setTimeout(()=>{S.faceDetected=false;},1500));
+}
+
+function schedBlink(){setTimeout(()=>{if(!S.isBlinking){S.isBlinking=true;S.blinkProgress=0;}schedBlink();},2500+Math.random()*4500);}
+function updBlink(dt){if(!S.isBlinking)return;S.blinkProgress+=dt*7.5;if(S.blinkProgress>=1){S.isBlinking=false;S.blinkProgress=0;}}
+function blinkAmt(){if(!S.isBlinking)return 0;const t=S.blinkProgress;return t<0.3?Math.sin(t/0.3*Math.PI/2):Math.cos((t-0.3)/0.7*Math.PI/2);}
+function updMicro(dt){S.microTimer+=dt;const t=S.microTimer;S.targetX=Math.sin(t*0.6)*0.1+Math.sin(t*1.4)*0.05+Math.sin(t*3.1)*0.015;S.targetY=Math.cos(t*0.45)*0.08+Math.cos(t*1.2)*0.04+Math.sin(t*2.8)*0.012;S.targetZ=0.5;}
+function lerp(a,b,t){return a+(b-a)*t;}
+
+// ============================================================
+// GAZE MODE LOGIC
+// ============================================================
+function updateGazeMode(dt){
+  const mode=S.gazeMode;
+  if(mode==='continuous'){
+    // Direct tracking — always follow
+    if(S.faceDetected){S.targetX=S.faceTargetX;S.targetY=S.faceTargetY;S.targetZ=S.faceTargetZ;}
+    else updMicro(dt);
+  }
+  else if(mode==='motion'){
+    // Only look when movement detected, then slowly drift away
+    if(S.faceDetected){
+      const dx=Math.abs(S.faceTargetX-S.lastMotionX),dy=Math.abs(S.faceTargetY-S.lastMotionY);
+      const motion=dx+dy;
+      if(motion>0.03){S.motionTriggered=true;S.motionDecay=2.5;S.lastMotionX=S.faceTargetX;S.lastMotionY=S.faceTargetY;}
+      if(S.motionTriggered){
+        S.targetX=S.faceTargetX;S.targetY=S.faceTargetY;S.targetZ=S.faceTargetZ;
+        S.motionDecay-=dt;
+        if(S.motionDecay<=0){S.motionTriggered=false;}
+      } else {updMicro(dt);}
+    } else {S.motionTriggered=false;updMicro(dt);}
+  }
+  else if(mode==='jumpscare'){
+    // Lurk: idle, then suddenly snap to face, hold, then drift away
+    S.lurkTimer+=dt;
+    if(!S.lurkLooking){
+      // Idle phase — slow drift
+      updMicro(dt);
+      // Random chance to "notice" the viewer
+      if(S.faceDetected&&S.lurkCooldown<=0){
+        const chance=0.003+0.01*(S.lurkTimer>10?1:0); // more likely over time
+        if(Math.random()<chance){
+          S.lurkLooking=true;S.lurkTimer=0;
+          S.lurkTarget.x=S.faceTargetX;S.lurkTarget.y=S.faceTargetY;
+        }
+      }
+      S.lurkCooldown=Math.max(0,S.lurkCooldown-dt);
+    } else {
+      // Staring phase — lock on with fast smoothing
+      S.targetX=S.faceDetected?S.faceTargetX:S.lurkTarget.x;
+      S.targetY=S.faceDetected?S.faceTargetY:S.lurkTarget.y;
+      S.targetZ=0.7;
+      // Hold for 1.5-4 seconds then release
+      if(S.lurkTimer>1.5+Math.random()*2.5){
+        S.lurkLooking=false;S.lurkTimer=0;S.lurkCooldown=3+Math.random()*5;
+      }
+    }
+  }
+}
+
+// ============================================================
+// ANIMATION
+// ============================================================
+function animate(){
+  requestAnimationFrame(animate);
+  const dt=clock.getDelta(),time=clock.getElapsedTime();
+  const emoLerp=0.055;
+
+  P.lidOpen=lerp(P.lidOpen,S.emoLidOpen,emoLerp);
+  P.lidUpperTilt=lerp(P.lidUpperTilt,S.emoLidUpperTilt,emoLerp);
+  P.lidLowerTilt=lerp(P.lidLowerTilt,S.emoLidLowerTilt,emoLerp);
+  P.lidSlant=lerp(P.lidSlant,S.emoLidSlant,emoLerp);
+  P.pupilSize=lerp(P.pupilSize,S.emoPupilSize,emoLerp);
+  P.lidLowerRatio=lerp(P.lidLowerRatio,S.emoLidLowerRatio,emoLerp);
+  P.lidWidth=lerp(P.lidWidth,S.emoLidWidth,emoLerp);
+  uBoth('uPupilSize',P.pupilSize);
+
+  // Gaze mode
+  updateGazeMode(dt);
+
+  // Smoothing (faster snap in jumpscare stare)
+  const sm=S.gazeMode==='jumpscare'&&S.lurkLooking?0.18:P.smoothing;
+  S.currentX+=(S.targetX-S.currentX)*sm;
+  S.currentY+=(S.targetY-S.currentY)*sm;
+  S.currentZ+=(S.targetZ-S.currentZ)*sm*0.5;
+
+  const tgtV=P.vergenceBase+Math.max(0,S.currentZ-0.35)*P.vergenceMax;
+  S.currentVergence+=(tgtV-S.currentVergence)*sm*0.7;
+
+  const gx=Math.max(-1,Math.min(1,S.currentX)),gy=Math.max(-1,Math.min(1,S.currentY));
+  const travel=P.maxTravel,globeR=P.globeRotate,maxRot=Math.PI/5;
+
+  // Shader gaze
+  eyeMatL.uniforms.uGazeOffset.value.set((gx+S.currentVergence*0.5)*travel*(1-globeR*0.5),gy*travel*(1-globeR*0.5));
+  if(P.cyclops<0.5)eyeMatR.uniforms.uGazeOffset.value.set((gx-S.currentVergence*0.5)*travel*(1-globeR*0.5),gy*travel*(1-globeR*0.5));
+
+  // Globe rotation
+  const lp=leftG.getObjectByName('pivot');
+  lp.rotation.y=gx*maxRot*globeR+(P.cyclops<0.5?S.currentVergence:0);lp.rotation.x=-gy*maxRot*globeR;
+  if(P.cyclops<0.5){const rp=rightG.getObjectByName('pivot');rp.rotation.y=gx*maxRot*globeR-S.currentVergence;rp.rotation.x=-gy*maxRot*globeR;}
+
+  // V2 model gaze (if active)
+  if(currentVersion==='v2'&&v2LeftG){
+    const lp2=v2LeftG.getObjectByName('pivot');
+    if(lp2){lp2.rotation.y=gx*maxRot*globeR+(P.cyclops<0.5?S.currentVergence:0);lp2.rotation.x=-gy*maxRot*globeR;}
+    if(P.cyclops<0.5&&v2RightG){const rp2=v2RightG.getObjectByName('pivot');if(rp2){rp2.rotation.y=gx*maxRot*globeR-S.currentVergence;rp2.rotation.x=-gy*maxRot*globeR;}}
+  }
+
+  eyeMatL.uniforms.uTime.value=time;eyeMatR.uniforms.uTime.value=time;
+
+  // Eyelids
+  updBlink(dt);const ba=blinkAmt();
+  const effOpen=P.lidOpen*(1.0-ba);
+  const upperAng=effOpen*0.7+P.lidUpperTilt;
+  const lowerAng=effOpen*P.lidLowerRatio*0.7+P.lidLowerTilt;
+  uBoth('uUpperLidY',0.45-upperAng*0.55);uBoth('uLowerLidY',-0.25+lowerAng*0.35);
+
+  const eyes=P.cyclops>0.5?[leftG]:[leftG,rightG];
+  // Include v2 eyes if they exist
+  const v2eyes=v2LeftG?(P.cyclops>0.5?[v2LeftG]:[v2LeftG,v2RightG]):[];
+  [...eyes,...v2eyes].forEach((g,i)=>{
+    const wrap=g.getObjectByName('lidWrap');
+    const ul=wrap.getObjectByName('upperLid'),ll=wrap.getObjectByName('lowerLid');
+    ul.rotation.x=-upperAng;ll.rotation.x=lowerAng;
+    ul.scale.x=P.lidWidth;ll.scale.x=P.lidWidth;
+    ul.scale.z=1.0+P.lidThickness;ll.scale.z=1.0+P.lidThickness*0.7;
+    const slantSign=P.cyclops>0.5?0:((i%2)===0?1:-1);
+    wrap.rotation.z=P.lidSlant*slantSign;
+  });
+
+  renderer.render(scene,camera);
+}
+
+function toggleFS(){const el=document.documentElement;if(!document.fullscreenElement&&!document.webkitFullscreenElement)(el.requestFullscreen||el.webkitRequestFullscreen).call(el);else(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
+function setStatus(t,x){document.getElementById('status-dot').className='dot '+t;document.getElementById('status-text').textContent=x;}
+function onResize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+
+// ============================================================
+// V2 MODEL LOADING (requires eye.glb + texture PNGs in same folder)
+// ============================================================
+let v2LeftG=null,v2RightG=null,currentVersion='v1';
+
+async function loadV2Model(){
+  if(typeof THREE.GLTFLoader==='undefined'){console.warn('GLTFLoader not available');return false;}
+  const loader=new THREE.GLTFLoader();
+  const texLoader=new THREE.TextureLoader();
+  const loadTex=(url,srgb)=>{const t=texLoader.load(url);if(srgb)t.encoding=THREE.sRGBEncoding;t.flipY=false;return t;};
+  
+  try{
+    const irisColorTex=loadTex('TinyEye_Iris_4096_basecolor.png',true);
+    const scleraColorTex=loadTex('TinyEye_Sclera_4096_basecolor.png',true);
+    const scleraNormalTex=loadTex('TinyEye_Sclera_4096_normal.png',false);
+    const scleraRoughTex=loadTex('TinyEye_Sclera_4096_roughness.png',false);
+    
+    const gltf=await new Promise((res,rej)=>loader.load('eye.glb',res,undefined,rej));
+    const model=gltf.scene;
+    
+    model.traverse(child=>{
+      if(!child.isMesh)return;
+      const mats=Array.isArray(child.material)?child.material:[child.material];
+      child.material=mats.map(mat=>{
+        if(mat.name&&mat.name.toLowerCase().includes('iris')){
+          const m=new THREE.MeshStandardMaterial({map:irisColorTex,color:0xffffff,metalness:0,roughness:0.5,envMap:envMap,envMapIntensity:0.8});
+          m.name='iris';m._isIris=true;
+          m.onBeforeCompile=function(shader){
+            shader.fragmentShader=shader.fragmentShader.replace('#include <map_fragment>',
+              '#ifdef USE_MAP\nvec4 texelColor=texture2D(map,vUv2);texelColor=mapTexelToLinear(texelColor);diffuseColor*=texelColor;\n#endif');
+          };
+          m.customProgramCacheKey=function(){return 'iris_uv2';};
+          return m;
+        }else{
+          const m=new THREE.MeshPhysicalMaterial({map:scleraColorTex,normalMap:scleraNormalTex,roughnessMap:scleraRoughTex,roughness:1,metalness:0,envMap:envMap,envMapIntensity:1,clearcoat:0.3,clearcoatRoughness:0.1});
+          m.name='sclera';return m;
+        }
+      });
+    });
+    
+    function makeV2Eye(mdl){
+      const g=new THREE.Group(),d=isMobile?48:64;
+      const pivot=new THREE.Group();pivot.name='pivot';
+      const eye=mdl.clone();
+      const box=new THREE.Box3().setFromObject(eye);
+      const size=box.getSize(new THREE.Vector3());
+      const sc=(R*2)/Math.max(size.x,size.y,size.z);
+      eye.scale.setScalar(sc);
+      const boxS=new THREE.Box3().setFromObject(eye);
+      eye.position.sub(boxS.getCenter(new THREE.Vector3()));
+      eye.rotation.set(-Math.PI/2,0,0);
+      eye.name='eyeModel';
+      pivot.add(eye);g.add(pivot);
+      // Same lids as v1
+      const lidWrap=new THREE.Group();lidWrap.name='lidWrap';
+      const lidMat=new THREE.MeshBasicMaterial({color:0x000000,side:THREE.FrontSide});
+      const lidR=R*1.15;
+      const ul=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,0,Math.PI*0.5),lidMat);
+      ul.name='upperLid';lidWrap.add(ul);
+      const ll=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,Math.PI*0.5,Math.PI*0.5),lidMat.clone());
+      ll.name='lowerLid';lidWrap.add(ll);
+      g.add(lidWrap);
+      g.add(Object.assign(new THREE.Mesh(new THREE.SphereGeometry(lidR*1.01,d/2,d/2,0,Math.PI*2,Math.PI*0.3,Math.PI*0.7),new THREE.MeshBasicMaterial({color:0x000000,side:THREE.BackSide})),{name:'backCap'}));
+      g.visible=false;
+      return g;
+    }
+    
+    v2LeftG=makeV2Eye(model);v2RightG=makeV2Eye(model);
+    eyeGroup.add(v2LeftG);eyeGroup.add(v2RightG);
+    
+    // Add real lights for PBR model
+    const amb=new THREE.AmbientLight(0xffffff,0.5);amb.name='v2light';scene.add(amb);
+    const keyL=new THREE.DirectionalLight(0xfff8f0,2.0);keyL.position.set(2,3,4);keyL.name='v2light';scene.add(keyL);
+    const fillL=new THREE.DirectionalLight(0xd0e0ff,0.8);fillL.position.set(-3,1,2);fillL.name='v2light';scene.add(fillL);
+    
+    console.log('V2 model loaded successfully');
+    return true;
+  }catch(e){console.warn('V2 model not available:',e.message);return false;}
+}
+
+function switchVersion(ver){
+  currentVersion=ver;
+  if(ver==='v1'){
+    leftG.visible=true;
+    rightG.visible=P.cyclops<0.5;
+    if(v2LeftG)v2LeftG.visible=false;
+    if(v2RightG)v2RightG.visible=false;
+  }else{
+    leftG.visible=false;
+    rightG.visible=false;
+    if(v2LeftG)v2LeftG.visible=true;
+    if(v2RightG)v2RightG.visible=P.cyclops<0.5;
+  }
+  scene.traverse(c=>{if(c.name==='v2light')c.visible=ver==='v2';});
+  updateLayout();
+}
+
+const _origUpdateLayout=updateLayout;
+updateLayout=function(){
+  // V1 layout
+  const s=P.eyeSpacing/2;
+  if(P.cyclops>0.5){
+    leftG.position.set(0,0,0);leftG.scale.setScalar(P.eyeScale*1.3);
+  }else{
+    leftG.position.set(-s,0,0);rightG.position.set(s,0,0);
+    leftG.scale.setScalar(P.eyeScale);rightG.scale.setScalar(P.eyeScale);
+  }
+  eyeGroup.rotation.z=P.eyeTilt;
+  // V2 layout (same positions)
+  if(v2LeftG&&v2RightG){
+    if(P.cyclops>0.5){
+      v2LeftG.position.set(0,0,0);v2LeftG.scale.setScalar(P.eyeScale*1.3);
+    }else{
+      v2LeftG.position.set(-s,0,0);v2RightG.position.set(s,0,0);
+      v2LeftG.scale.setScalar(P.eyeScale);v2RightG.scale.setScalar(P.eyeScale);
+    }
+  }
+  // Enforce visibility based on current version
+  if(currentVersion==='v1'){
+    leftG.visible=true;rightG.visible=P.cyclops<0.5;
+    if(v2LeftG)v2LeftG.visible=false;
+    if(v2RightG)v2RightG.visible=false;
+  }else{
+    leftG.visible=false;rightG.visible=false;
+    if(v2LeftG)v2LeftG.visible=true;
+    if(v2RightG)v2RightG.visible=P.cyclops<0.5;
+  }
+};
+
+async function init(){
+  initThree();initPanel();updLight();schedBlink();applyEmotion('neutral');animate();
+  // Try loading v2 model (will silently fail if files not present)
+  const v2ok=await loadV2Model();
+  // Setup version toggle
+  document.querySelectorAll('#version-toggle .mode-btn').forEach(btn=>{
+    btn.addEventListener('click',()=>{
+      if(!v2ok&&btn.dataset.version==='v2'){alert('V2 model not found. Place eye.glb and texture PNGs in the same folder.');return;}
+      document.querySelectorAll('#version-toggle .mode-btn').forEach(b=>b.classList.remove('active'));
+      btn.classList.add('active');
+      switchVersion(btn.dataset.version);
+    });
+  });
+  await initTracking();
+}
+init();
+</script>
+</body>
+</html>

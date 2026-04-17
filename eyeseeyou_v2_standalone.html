@@ -1,0 +1,574 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+<meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
+<title>EyeSeeYou v2</title>
+<style>
+@import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
+*{margin:0;padding:0;box-sizing:border-box;}
+body{background:#000;overflow:hidden;font-family:'Space Mono',monospace;color:#fff;cursor:crosshair;touch-action:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none;}
+#canvas-container{width:100vw;height:100vh;height:100dvh;position:fixed;top:0;left:0;}
+#webcam-debug{position:fixed;bottom:16px;left:16px;width:180px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;z-index:100;display:none;opacity:0.6;}
+#panel{position:fixed;top:0;right:0;width:310px;height:100vh;height:100dvh;background:rgba(5,5,10,0.93);backdrop-filter:blur(14px);border-left:1px solid rgba(255,255,255,0.06);z-index:200;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 50px;font-size:11px;}
+#panel.open{transform:translateX(0);}
+#panel h3{font-size:9px;text-transform:uppercase;letter-spacing:3px;color:rgba(255,255,255,0.35);margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid rgba(255,255,255,0.05);}
+#panel h3:first-child{margin-top:0;}
+.pr{display:flex;align-items:center;margin:4px 0;gap:6px;}
+.pr label{flex:1;color:rgba(255,255,255,0.55);font-size:9px;}
+.pr input[type=range]{flex:1.5;accent-color:#556;height:2px;}
+.pr .v{width:34px;text-align:right;color:rgba(255,255,255,0.3);font-size:8px;font-family:'Space Mono',monospace;}
+.pr input[type=color]{width:24px;height:16px;border:1px solid rgba(255,255,255,0.12);background:none;cursor:pointer;border-radius:2px;padding:0;}
+#panel-toggle{position:fixed;top:14px;right:14px;z-index:300;width:36px;height:36px;border-radius:50%;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:#fff;font-size:14px;cursor:pointer;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+#bottombar{position:fixed;bottom:14px;left:50%;transform:translateX(-50%);z-index:150;display:flex;gap:8px;align-items:center;}
+#emotions{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.emo-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:#fff;font-size:16px;width:34px;height:34px;border-radius:50%;cursor:pointer;transition:all 0.2s;display:flex;align-items:center;justify-content:center;-webkit-tap-highlight-color:transparent;}
+.emo-btn:hover{background:rgba(255,255,255,0.1);transform:scale(1.12);}
+.emo-btn.active{background:rgba(255,255,255,0.15);border-color:rgba(255,255,255,0.4);}
+#modes{display:flex;gap:4px;background:rgba(0,0,0,0.55);backdrop-filter:blur(10px);border:1px solid rgba(255,255,255,0.08);border-radius:22px;padding:5px 10px;}
+.mode-btn{background:none;border:1px solid rgba(255,255,255,0.08);color:rgba(255,255,255,0.6);font-size:8px;letter-spacing:1px;text-transform:uppercase;padding:6px 10px;border-radius:12px;cursor:pointer;transition:all 0.2s;font-family:'Space Mono',monospace;-webkit-tap-highlight-color:transparent;}
+.mode-btn:hover{background:rgba(255,255,255,0.08);}
+.mode-btn.active{background:rgba(255,255,255,0.12);border-color:rgba(255,255,255,0.35);color:#fff;}
+#loading{position:fixed;top:0;left:0;width:100%;height:100%;background:#000;display:flex;flex-direction:column;align-items:center;justify-content:center;z-index:1000;transition:opacity 0.8s;}
+#loading.hidden{opacity:0;pointer-events:none;}
+#loading h1{font-size:38px;letter-spacing:5px;margin-bottom:14px;}
+.le{width:9px;height:9px;background:#fff;border-radius:50%;display:inline-block;margin:0 3px;animation:bl 2s infinite;}
+.le:nth-child(2){animation-delay:0.15s;}
+@keyframes bl{0%,80%,100%{transform:scaleY(1);}90%{transform:scaleY(0.1);}}
+#loading-status{font-size:10px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.35);}
+#status{position:fixed;top:14px;left:14px;font-size:8px;letter-spacing:2px;text-transform:uppercase;color:rgba(255,255,255,0.2);z-index:100;}
+.dot{display:inline-block;width:5px;height:5px;border-radius:50%;margin-right:5px;vertical-align:middle;}
+.dot.active{background:#4f4;}.dot.inactive{background:#f44;}.dot.loading{background:#fa0;animation:pu 1s infinite;}
+@keyframes pu{0%,100%{opacity:1;}50%{opacity:0.3;}}
+.ui-layer{transition:opacity 0.5s;}
+body.immersed .ui-layer{opacity:0;pointer-events:none;}
+body.immersed.ui-peek .ui-layer{opacity:1;pointer-events:auto;}
+#immerse-btn{position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:300;background:rgba(0,0,0,0.5);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);color:rgba(255,255,255,0.5);font-size:8px;letter-spacing:2px;text-transform:uppercase;font-family:'Space Mono',monospace;padding:8px 16px;border-radius:14px;cursor:pointer;transition:all 0.3s;-webkit-tap-highlight-color:transparent;}
+#immerse-btn:hover{background:rgba(255,255,255,0.1);color:#fff;}
+body.immersed #immerse-btn{opacity:0;pointer-events:none;}
+body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
+@media(max-width:768px),(pointer:coarse){#panel{width:100%;}#bottombar{flex-direction:column;gap:5px;}}
+</style>
+</head>
+<body>
+<div id="loading"><h1>EYE<span class="le"></span><span class="le"></span>YOU</h1><div id="loading-status">Loading 3D model...</div></div>
+<div id="canvas-container"></div>
+<video id="webcam-debug" autoplay playsinline muted></video>
+<div id="panel-toggle" class="ui-layer">&#9881;</div>
+<div id="immerse-btn" class="ui-layer">Immerse</div>
+<div id="panel" class="ui-layer">
+  <h3>Iris</h3>
+  <div class="pr"><label>Color</label><input type="color" id="p-irisColor" value="#4a8a50"><span class="v"></span></div>
+  <h3>Eyelids</h3>
+  <div class="pr"><label>Openness</label><input type="range" id="p-lidOpen" min="0" max="1.5" step="0.01" value="0.43"><span class="v">0.43</span></div>
+  <div class="pr"><label>Upper Tilt</label><input type="range" id="p-lidUpperTilt" min="-0.4" max="0.4" step="0.01" value="-0.22"><span class="v">-0.22</span></div>
+  <div class="pr"><label>Lower Tilt</label><input type="range" id="p-lidLowerTilt" min="-0.4" max="0.4" step="0.01" value="-0.02"><span class="v">-0.02</span></div>
+  <div class="pr"><label>Slant</label><input type="range" id="p-lidSlant" min="-0.5" max="0.5" step="0.01" value="0.01"><span class="v">0.01</span></div>
+  <div class="pr"><label>Width</label><input type="range" id="p-lidWidth" min="0.7" max="1.4" step="0.01" value="1.08"><span class="v">1.08</span></div>
+  <div class="pr"><label>Thickness</label><input type="range" id="p-lidThickness" min="0" max="2" step="0.05" value="0.25"><span class="v">0.25</span></div>
+  <div class="pr"><label>Lower Ratio</label><input type="range" id="p-lidLowerRatio" min="0" max="0.6" step="0.01" value="0.60"><span class="v">0.60</span></div>
+  <h3>Eyes — Layout</h3>
+  <div class="pr"><label>Scale</label><input type="range" id="p-eyeScale" min="0.4" max="2.5" step="0.05" value="1.15"><span class="v">1.15</span></div>
+  <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
+  <h3>Tracking</h3>
+  <div class="pr"><label>Smoothing</label><input type="range" id="p-smoothing" min="0.02" max="0.25" step="0.01" value="0.07"><span class="v">0.07</span></div>
+  <div class="pr"><label>Sensitivity</label><input type="range" id="p-sensitivity" min="0.3" max="2" step="0.05" value="1"><span class="v">1.00</span></div>
+  <div class="pr"><label>Max Travel</label><input type="range" id="p-maxTravel" min="0.1" max="0.9" step="0.01" value="0.42"><span class="v">0.42</span></div>
+  <div class="pr"><label>Globe Rotate</label><input type="range" id="p-globeRotate" min="0" max="1" step="0.05" value="0.8"><span class="v">0.80</span></div>
+  <h3>Parallax</h3>
+  <div class="pr"><label>Offset X</label><input type="range" id="p-parallaxX" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Offset Y</label><input type="range" id="p-parallaxY" min="-0.5" max="0.5" step="0.01" value="-0.08"><span class="v">-0.08</span></div>
+  <h3>Vergence</h3>
+  <div class="pr"><label>Base</label><input type="range" id="p-vergenceBase" min="0" max="0.12" step="0.005" value="0.04"><span class="v">0.04</span></div>
+  <div class="pr"><label>Max Cross</label><input type="range" id="p-vergenceMax" min="0" max="0.5" step="0.01" value="0.3"><span class="v">0.30</span></div>
+  <h3>Environment</h3>
+  <div class="pr"><label>BG</label><input type="color" id="p-bgColor" value="#050508"><span class="v"></span></div>
+</div>
+<div id="bottombar" class="ui-layer">
+  <div id="emotions">
+    <button class="emo-btn active" data-emo="neutral" title="Neutral">😐</button>
+    <button class="emo-btn" data-emo="joy" title="Joy">😊</button>
+    <button class="emo-btn" data-emo="anger" title="Anger">😠</button>
+    <button class="emo-btn" data-emo="fear" title="Fear">😨</button>
+    <button class="emo-btn" data-emo="sadness" title="Sadness">😢</button>
+    <button class="emo-btn" data-emo="surprise" title="Surprise">😲</button>
+    <button class="emo-btn" data-emo="contempt" title="Contempt">😒</button>
+  </div>
+  <div id="modes">
+    <button class="mode-btn active" data-mode="continuous">Track</button>
+    <button class="mode-btn" data-mode="motion">Motion</button>
+    <button class="mode-btn" data-mode="jumpscare">Lurk</button>
+  </div>
+</div>
+<div id="status" class="ui-layer"><span class="dot loading" id="status-dot"></span><span id="status-text">Loading...</span></div>
+
+<!-- Three.js r128 + GLTFLoader -->
+<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/three@0.128.0/examples/js/loaders/GLTFLoader.js"></script>
+<!-- TF + BlazeFace for tracking -->
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs"></script>
+<script src="https://cdn.jsdelivr.net/npm/@tensorflow-models/blazeface"></script>
+
+<script>
+const isMobile=/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)||(navigator.maxTouchPoints>0&&innerWidth<1024);
+const R=0.65; // reference radius for lids
+
+const P={
+  irisColor:new THREE.Color(0x4a8a50),
+  lidOpen:0.43,lidUpperTilt:-0.22,lidLowerTilt:-0.02,lidSlant:0.01,
+  lidWidth:1.08,lidThickness:0.25,lidLowerRatio:0.60,
+  eyeScale:1.15,eyeSpacing:1.8,eyeTilt:0,cyclops:0,
+  smoothing:0.07,sensitivity:1.0,maxTravel:0.42,globeRotate:0.8,
+  parallaxX:0,parallaxY:-0.08,
+  vergenceBase:0.04,vergenceMax:0.3,
+  bgColor:new THREE.Color(0x050508),
+};
+
+const S={
+  faceTargetX:0,faceTargetY:0,faceTargetZ:0.5,
+  targetX:0,targetY:0,targetZ:0.5,
+  currentX:0,currentY:0,currentZ:0.5,currentVergence:0,
+  blinkProgress:0,isBlinking:false,
+  faceDetected:false,lastFaceTime:0,microTimer:0,
+  currentEmotion:'neutral',gazeMode:'continuous',
+  emoLidOpen:0.43,emoLidUpperTilt:-0.22,emoLidLowerTilt:-0.02,emoLidSlant:0.01,
+  emoPupilSize:0.16,emoLidLowerRatio:0.60,emoLidWidth:1.08,
+  lastMotionX:0,lastMotionY:0,motionTriggered:false,motionDecay:0,
+  lurkTimer:0,lurkLooking:false,lurkCooldown:0,lurkTarget:{x:0,y:0},
+};
+
+const EMOTIONS={
+  neutral:{lidOpen:0.43,lidUpperTilt:-0.22,lidLowerTilt:-0.02,lidSlant:0.01,pupilSize:0.16,lidLowerRatio:0.60,lidWidth:1.08},
+  joy:{lidOpen:0.62,lidUpperTilt:0.06,lidLowerTilt:0.14,lidSlant:0.08,pupilSize:0.13,lidLowerRatio:0.38,lidWidth:1.12},
+  anger:{lidOpen:0.52,lidUpperTilt:-0.22,lidLowerTilt:0.12,lidSlant:-0.14,pupilSize:0.07,lidLowerRatio:0.32,lidWidth:1.02},
+  fear:{lidOpen:1.25,lidUpperTilt:0.14,lidLowerTilt:-0.1,lidSlant:0,pupilSize:0.055,lidLowerRatio:0.12,lidWidth:1.1},
+  sadness:{lidOpen:0.58,lidUpperTilt:-0.12,lidLowerTilt:-0.04,lidSlant:0.12,pupilSize:0.12,lidLowerRatio:0.18,lidWidth:0.98},
+  surprise:{lidOpen:1.35,lidUpperTilt:0.1,lidLowerTilt:-0.14,lidSlant:0,pupilSize:0.065,lidLowerRatio:0.08,lidWidth:1.18},
+  contempt:{lidOpen:0.68,lidUpperTilt:-0.06,lidLowerTilt:0.06,lidSlant:-0.2,pupilSize:0.10,lidLowerRatio:0.28,lidWidth:0.98},
+};
+
+let scene,camera,renderer,eyeGroup,leftG,rightG,clock=new THREE.Clock();
+let envMap=null;
+// References to the 3D model eye meshes for gaze control
+let leftEyeMesh=null,rightEyeMesh=null;
+
+// ============================================================
+// ENV MAP
+// ============================================================
+function createEnvMap(){
+  const pmrem=new THREE.PMREMGenerator(renderer);
+  pmrem.compileEquirectangularShader();
+  const es=new THREE.Scene();
+  es.add(new THREE.AmbientLight(0xddeeff,0.5));
+  const key=new THREE.DirectionalLight(0xfff4e0,2.0);key.position.set(3,4,5);es.add(key);
+  const fill=new THREE.DirectionalLight(0xc0d8ff,0.7);fill.position.set(-4,1,3);es.add(fill);
+  const rim=new THREE.DirectionalLight(0xffffff,0.5);rim.position.set(0,2,-5);es.add(rim);
+  // Window reflections
+  const wm=new THREE.MeshBasicMaterial({color:0xffffff});
+  const w1=new THREE.Mesh(new THREE.PlaneGeometry(6,4),wm);w1.position.set(0,2,8);es.add(w1);
+  const w2=new THREE.Mesh(new THREE.PlaneGeometry(2,1.5),new THREE.MeshBasicMaterial({color:0xaabbcc}));
+  w2.position.set(-3,1,6);w2.rotation.y=0.3;es.add(w2);
+  envMap=pmrem.fromScene(es,0,0.1,100).texture;
+  pmrem.dispose();
+}
+
+// ============================================================
+// SCENE INIT
+// ============================================================
+function initThree(){
+  scene=new THREE.Scene();scene.background=P.bgColor;
+  camera=new THREE.PerspectiveCamera(38,innerWidth/innerHeight,0.1,100);
+  camera.position.z=5;
+  renderer=new THREE.WebGLRenderer({antialias:!isMobile});
+  renderer.setSize(innerWidth,innerHeight);
+  renderer.setPixelRatio(Math.min(devicePixelRatio,isMobile?1.5:2));
+  renderer.toneMapping=THREE.ACESFilmicToneMapping;
+  renderer.toneMappingExposure=1.1;
+  renderer.outputEncoding=THREE.sRGBEncoding;
+  document.getElementById('canvas-container').appendChild(renderer.domElement);
+  createEnvMap();
+  scene.environment=envMap;
+  // Lights — boosted for PBR model
+  const ambient=new THREE.AmbientLight(0xffffff,0.6);scene.add(ambient);
+  const key=new THREE.DirectionalLight(0xfff8f0,2.5);key.position.set(2,3,4);scene.add(key);
+  const fill=new THREE.DirectionalLight(0xd0e0ff,1.0);fill.position.set(-3,1,2);scene.add(fill);
+  const back=new THREE.DirectionalLight(0xffffff,0.5);back.position.set(0,1,-3);scene.add(back);
+  eyeGroup=new THREE.Group();
+  scene.add(eyeGroup);
+  addEventListener('resize',onResize);
+}
+
+// ============================================================
+// LOAD GLB MODEL + MANUAL TEXTURES
+// ============================================================
+async function loadEyeModel(){
+  const loader=new THREE.GLTFLoader();
+  const texLoader=new THREE.TextureLoader();
+  
+  // Load textures manually — bypasses broken UV set references
+  const loadTex=(url,srgb)=>{
+    const t=texLoader.load(url);
+    if(srgb)t.encoding=THREE.sRGBEncoding;
+    t.flipY=false; // glTF convention: textures are NOT flipped
+    return t;
+  };
+  
+  const irisColorTex=loadTex('TinyEye_Iris_4096_basecolor.png',true);
+  const scleraColorTex=loadTex('TinyEye_Sclera_4096_basecolor.png',true);
+  const scleraNormalTex=loadTex('TinyEye_Sclera_4096_normal.png',false);
+  const scleraRoughTex=loadTex('TinyEye_Sclera_4096_roughness.png',false);
+  
+  return new Promise((resolve,reject)=>{
+    loader.load('eye.glb',gltf=>{
+      const model=gltf.scene;
+      
+      model.traverse(child=>{
+        if(!child.isMesh)return;
+        const mats=Array.isArray(child.material)?child.material:[child.material];
+        const geos=child.geometry;
+        
+        const newMats=mats.map((mat,idx)=>{
+          const isIris=mat.name&&mat.name.toLowerCase().includes('iris');
+          
+          if(isIris){
+            // For iris: copy uv2 (TEXCOORD_1 = Bake Iris) to uv (TEXCOORD_0)
+            // so the map reads the correct UV
+            // We'll do this per-group after material assignment
+            const irisMat=new THREE.MeshStandardMaterial({
+              map:irisColorTex,
+              color:0xffffff,
+              metalness:0,
+              roughness:0.5,
+              envMap:envMap,
+              envMapIntensity:0.8,
+            });
+            irisMat.name='iris';
+            irisMat._isIris=true;
+            return irisMat;
+          }else{
+            const sclMat=new THREE.MeshPhysicalMaterial({
+              map:scleraColorTex,
+              normalMap:scleraNormalTex,
+              roughnessMap:scleraRoughTex,
+              roughness:1.0,
+              metalness:0,
+              envMap:envMap,
+              envMapIntensity:1.0,
+              clearcoat:0.3,
+              clearcoatRoughness:0.1,
+            });
+            sclMat.name='sclera';
+            return sclMat;
+          }
+        });
+        
+        if(newMats.length===1)child.material=newMats[0];
+        else child.material=newMats;
+        
+        // Fix iris UVs: the iris bake is on uv2 (TEXCOORD_1)
+        // but Three.js material.map reads from uv (TEXCOORD_0)
+        // Solution: for iris geometry group, copy uv2 data into uv
+        if(geos.attributes.uv2 && geos.groups && geos.groups.length>0){
+          // Find which group is iris (material index matches)
+          const irisIdx=newMats.findIndex(m=>m._isIris);
+          if(irisIdx>=0){
+            // We can't selectively swap UVs per group on a shared geometry
+            // So we split: create a new geometry for iris with swapped UVs
+            // Actually simpler: just copy uv2 into uv for ALL vertices
+            // Since sclera bake UV was put on TEXCOORD_0 and iris on TEXCOORD_1,
+            // the sclera already reads correct from uv. For iris we need uv2.
+            // Best approach: use the iris texture on the uv2 channel via material hack
+            
+            // Fallback: patch the iris material shader to read vUv2
+            const irisMat=newMats[irisIdx];
+            irisMat.onBeforeCompile=function(shader){
+              // Ensure vUv2 is declared and passed
+              shader.fragmentShader=shader.fragmentShader.replace(
+                '#include <map_fragment>',
+                [
+                  '#ifdef USE_MAP',
+                  '  vec4 texelColor = texture2D( map, vUv2 );',
+                  '  texelColor = mapTexelToLinear( texelColor );',
+                  '  diffuseColor *= texelColor;',
+                  '#endif'
+                ].join('\n')
+              );
+            };
+            irisMat.customProgramCacheKey=function(){return 'iris_uv2';};
+          }
+        }
+      });
+      
+      resolve(model);
+    },undefined,reject);
+  });
+}
+
+function createEyeGroup(eyeModel){
+  const d=isMobile?48:64;
+
+  function makeEye(model){
+    const g=new THREE.Group();
+    const pivot=new THREE.Group();pivot.name='pivot';
+
+    // Clone the 3D model
+    const eye=model.clone();
+    
+    // Debug: log model dimensions
+    const box=new THREE.Box3().setFromObject(eye);
+    const size=box.getSize(new THREE.Vector3());
+    const center=box.getCenter(new THREE.Vector3());
+    console.log('Eye model size:',size,'center:',center);
+    
+    // Scale to match our lid radius R=0.65
+    const maxDim=Math.max(size.x,size.y,size.z);
+    const sc=(R*2)/maxDim;
+    eye.scale.setScalar(sc);
+    
+    // Re-center after scaling
+    const boxScaled=new THREE.Box3().setFromObject(eye);
+    const centerScaled=boxScaled.getCenter(new THREE.Vector3());
+    eye.position.sub(centerScaled);
+    
+    // Iris faces +Y in glTF space, rotate -90° around X to face +Z (camera)
+    eye.rotation.set(-Math.PI/2, 0, 0);
+    
+    eye.name='eyeModel';
+    pivot.add(eye);
+    g.add(pivot);
+
+    // Procedural lids (same as MVP — they work well)
+    const lidWrap=new THREE.Group();lidWrap.name='lidWrap';
+    const lidMat=new THREE.MeshBasicMaterial({color:0x000000,side:THREE.FrontSide});
+    const lidR=R*1.15;
+    const ul=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,0,Math.PI*0.5),lidMat);
+    ul.name='upperLid';lidWrap.add(ul);
+    const ll=new THREE.Mesh(new THREE.SphereGeometry(lidR,d,d/2,0,Math.PI*2,Math.PI*0.5,Math.PI*0.5),lidMat.clone());
+    ll.name='lowerLid';lidWrap.add(ll);
+    g.add(lidWrap);
+    // Back cap
+    g.add(Object.assign(new THREE.Mesh(
+      new THREE.SphereGeometry(lidR*1.01,d/2,d/2,0,Math.PI*2,Math.PI*0.3,Math.PI*0.7),
+      new THREE.MeshBasicMaterial({color:0x000000,side:THREE.BackSide})
+    ),{name:'backCap'}));
+
+    return g;
+  }
+
+  leftG=makeEye(eyeModel);
+  rightG=makeEye(eyeModel);
+  eyeGroup.add(leftG);
+  eyeGroup.add(rightG);
+  updateLayout();
+}
+
+function updateLayout(){
+  const s=P.eyeSpacing/2;
+  if(P.cyclops>0.5){
+    leftG.visible=true;rightG.visible=false;
+    leftG.position.set(0,0,0);
+    leftG.scale.setScalar(P.eyeScale*(1+P.cyclops*0.3));
+  }else{
+    leftG.visible=true;rightG.visible=true;
+    leftG.position.set(-s,0,0);rightG.position.set(s,0,0);
+    leftG.scale.setScalar(P.eyeScale);rightG.scale.setScalar(P.eyeScale);
+  }
+  eyeGroup.rotation.z=P.eyeTilt;
+}
+
+// ============================================================
+// PANEL
+// ============================================================
+function initPanel(){
+  document.getElementById('panel-toggle').addEventListener('click',()=>document.getElementById('panel').classList.toggle('open'));
+  document.querySelectorAll('#panel input[type=range]').forEach(inp=>{
+    const vs=inp.parentElement.querySelector('.v');
+    inp.addEventListener('input',()=>{vs.textContent=parseFloat(inp.value).toFixed(2);applyP(inp.id,parseFloat(inp.value));});
+  });
+  document.querySelectorAll('#panel input[type=color]').forEach(inp=>{inp.addEventListener('input',()=>applyP(inp.id,inp.value));});
+  document.addEventListener('keydown',e=>{
+    if(e.key==='Tab'){e.preventDefault();document.getElementById('panel').classList.toggle('open');}
+    if(e.key==='f'||e.key==='F')toggleFS();
+    if(e.key==='d'||e.key==='D'){const v=document.getElementById('webcam-debug');v.style.display=v.style.display==='none'?'block':'none';}
+  });
+  document.querySelectorAll('.emo-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.emo-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');applyEmotion(btn.dataset.emo);});});
+  document.querySelectorAll('.mode-btn').forEach(btn=>{btn.addEventListener('click',()=>{document.querySelectorAll('.mode-btn').forEach(b=>b.classList.remove('active'));btn.classList.add('active');S.gazeMode=btn.dataset.mode;});});
+  // Immerse
+  let immerseTO=null;
+  document.getElementById('immerse-btn').addEventListener('click',()=>{
+    document.body.classList.add('immersed');
+    try{const el=document.documentElement;if(el.requestFullscreen)el.requestFullscreen();else if(el.webkitRequestFullscreen)el.webkitRequestFullscreen();}catch(e){}
+  });
+  function peekUI(){if(!document.body.classList.contains('immersed'))return;document.body.classList.add('ui-peek');clearTimeout(immerseTO);immerseTO=setTimeout(()=>document.body.classList.remove('ui-peek'),2500);}
+  document.addEventListener('mousemove',peekUI);
+  document.addEventListener('touchstart',peekUI);
+  document.addEventListener('keydown',e2=>{if(e2.key==='Escape')document.body.classList.remove('immersed','ui-peek');});
+}
+
+function applyP(id,val){
+  const m={
+    'p-irisColor':()=>{P.irisColor.set(val);},
+    'p-lidOpen':()=>{P.lidOpen=val;S.emoLidOpen=val;},'p-lidUpperTilt':()=>{P.lidUpperTilt=val;S.emoLidUpperTilt=val;},
+    'p-lidLowerTilt':()=>{P.lidLowerTilt=val;S.emoLidLowerTilt=val;},'p-lidSlant':()=>{P.lidSlant=val;S.emoLidSlant=val;},
+    'p-lidWidth':()=>{P.lidWidth=val;S.emoLidWidth=val;},'p-lidThickness':()=>P.lidThickness=val,
+    'p-lidLowerRatio':()=>{P.lidLowerRatio=val;S.emoLidLowerRatio=val;},
+    'p-eyeScale':()=>{P.eyeScale=val;updateLayout();},'p-eyeSpacing':()=>{P.eyeSpacing=val;updateLayout();},
+    'p-eyeTilt':()=>{P.eyeTilt=val;updateLayout();},'p-cyclops':()=>{P.cyclops=val;updateLayout();},
+    'p-smoothing':()=>P.smoothing=val,'p-sensitivity':()=>P.sensitivity=val,
+    'p-maxTravel':()=>P.maxTravel=val,'p-globeRotate':()=>P.globeRotate=val,
+    'p-parallaxX':()=>P.parallaxX=val,'p-parallaxY':()=>P.parallaxY=val,
+    'p-vergenceBase':()=>P.vergenceBase=val,'p-vergenceMax':()=>P.vergenceMax=val,
+    'p-bgColor':()=>{P.bgColor.set(val);scene.background=P.bgColor;},
+  };
+  if(m[id])m[id]();
+}
+function applyEmotion(name){const e=EMOTIONS[name];if(!e)return;S.currentEmotion=name;S.emoLidOpen=e.lidOpen;S.emoLidUpperTilt=e.lidUpperTilt;S.emoLidLowerTilt=e.lidLowerTilt;S.emoLidSlant=e.lidSlant;S.emoPupilSize=e.pupilSize;S.emoLidLowerRatio=e.lidLowerRatio;S.emoLidWidth=e.lidWidth;}
+
+// ============================================================
+// TRACKING (same as MVP)
+// ============================================================
+let bfModel=null,video=null,lastTT=0;const trackInt=isMobile?50:33;
+async function initTracking(){
+  const s=document.getElementById('loading-status');
+  try{
+    s.textContent='Loading face detection...';
+    if(typeof tf==='undefined'||typeof blazeface==='undefined')throw new Error('N/A');
+    try{await tf.setBackend('webgl');}catch(e){}await tf.ready();
+    bfModel=await blazeface.load();s.textContent='Requesting camera...';
+    const stream=await navigator.mediaDevices.getUserMedia({video:{width:{ideal:isMobile?320:480},height:{ideal:isMobile?240:360},facingMode:'user'},audio:false});
+    video=document.getElementById('webcam-debug');video.srcObject=stream;video.setAttribute('playsinline','');
+    await new Promise(r=>video.onloadedmetadata=r);
+    try{await video.play();}catch(e){document.addEventListener('touchstart',async()=>{await video.play();},{once:true});}
+    document.getElementById('loading').classList.add('hidden');setStatus('active','Tracking');
+    if('wakeLock'in navigator)try{await navigator.wakeLock.request('screen');}catch(e){}
+    trackLoop();
+  }catch(err){console.warn('T:',err.message);s.textContent='Pointer mode';document.getElementById('loading').classList.add('hidden');setStatus('inactive','Pointer');initPointerFallback();}
+}
+function trackLoop(){
+  if(!bfModel||!video||video.readyState<2){requestAnimationFrame(trackLoop);return;}
+  const now=performance.now();if(now-lastTT<trackInt){requestAnimationFrame(trackLoop);return;}lastTT=now;
+  bfModel.estimateFaces(video,false).then(p=>{
+    if(p.length>0){const f=p[0],re=f.landmarks[0],le=f.landmarks[1];S.faceTargetX=-((re[0]+le[0])/2/video.videoWidth*2-1)*P.sensitivity+P.parallaxX;S.faceTargetY=-((re[1]+le[1])/2/video.videoHeight*2-1)*P.sensitivity+P.parallaxY;S.faceTargetZ=Math.min(1,Math.sqrt(Math.pow((re[0]-le[0])/video.videoWidth,2)+Math.pow((re[1]-le[1])/video.videoHeight,2))*4);S.faceDetected=true;S.lastFaceTime=now;setStatus('active','Tracking');}
+    else if(S.faceDetected&&now-S.lastFaceTime>500){S.faceDetected=false;setStatus('inactive','No face');}
+  }).catch(()=>{});requestAnimationFrame(trackLoop);
+}
+function initPointerFallback(){
+  const h=(x,y)=>{S.faceTargetX=(x/innerWidth*2-1)*P.sensitivity+P.parallaxX;S.faceTargetY=-(y/innerHeight*2-1)*P.sensitivity+P.parallaxY;S.faceTargetZ=0.5;S.faceDetected=true;S.lastFaceTime=performance.now();};
+  document.addEventListener('mousemove',e=>h(e.clientX,e.clientY));
+  document.addEventListener('touchmove',e=>{e.preventDefault();h(e.touches[0].clientX,e.touches[0].clientY);},{passive:false});
+  document.addEventListener('touchstart',e=>h(e.touches[0].clientX,e.touches[0].clientY),{passive:true});
+  document.addEventListener('touchend',()=>setTimeout(()=>{S.faceDetected=false;},1500));
+}
+
+function schedBlink(){setTimeout(()=>{if(!S.isBlinking){S.isBlinking=true;S.blinkProgress=0;}schedBlink();},2500+Math.random()*4500);}
+function updBlink(dt){if(!S.isBlinking)return;S.blinkProgress+=dt*7.5;if(S.blinkProgress>=1){S.isBlinking=false;S.blinkProgress=0;}}
+function blinkAmt(){if(!S.isBlinking)return 0;const t=S.blinkProgress;return t<0.3?Math.sin(t/0.3*Math.PI/2):Math.cos((t-0.3)/0.7*Math.PI/2);}
+function lerp(a,b,t){return a+(b-a)*t;}
+
+function updMicro(dt){S.microTimer+=dt;const t=S.microTimer;S.targetX=Math.sin(t*0.6)*0.1+Math.sin(t*1.4)*0.05+Math.sin(t*3.1)*0.015;S.targetY=Math.cos(t*0.45)*0.08+Math.cos(t*1.2)*0.04+Math.sin(t*2.8)*0.012;S.targetZ=0.5;}
+
+function updateGazeMode(dt){
+  const m=S.gazeMode;
+  if(m==='continuous'){if(S.faceDetected){S.targetX=S.faceTargetX;S.targetY=S.faceTargetY;S.targetZ=S.faceTargetZ;}else updMicro(dt);}
+  else if(m==='motion'){if(S.faceDetected){const d=Math.abs(S.faceTargetX-S.lastMotionX)+Math.abs(S.faceTargetY-S.lastMotionY);if(d>0.03){S.motionTriggered=true;S.motionDecay=2.5;S.lastMotionX=S.faceTargetX;S.lastMotionY=S.faceTargetY;}if(S.motionTriggered){S.targetX=S.faceTargetX;S.targetY=S.faceTargetY;S.targetZ=S.faceTargetZ;S.motionDecay-=dt;if(S.motionDecay<=0)S.motionTriggered=false;}else updMicro(dt);}else{S.motionTriggered=false;updMicro(dt);}}
+  else if(m==='jumpscare'){S.lurkTimer+=dt;if(!S.lurkLooking){updMicro(dt);if(S.faceDetected&&S.lurkCooldown<=0&&Math.random()<0.003+0.01*(S.lurkTimer>10?1:0)){S.lurkLooking=true;S.lurkTimer=0;S.lurkTarget.x=S.faceTargetX;S.lurkTarget.y=S.faceTargetY;}S.lurkCooldown=Math.max(0,S.lurkCooldown-dt);}else{S.targetX=S.faceDetected?S.faceTargetX:S.lurkTarget.x;S.targetY=S.faceDetected?S.faceTargetY:S.lurkTarget.y;S.targetZ=0.7;if(S.lurkTimer>1.5+Math.random()*2.5){S.lurkLooking=false;S.lurkTimer=0;S.lurkCooldown=3+Math.random()*5;}}}
+}
+
+// ============================================================
+// ANIMATION
+// ============================================================
+function animate(){
+  requestAnimationFrame(animate);
+  if(!leftG||!rightG)return; // wait for model
+  const dt=clock.getDelta(),time=clock.getElapsedTime();
+  const el=0.055;
+
+  // Emotion lerp
+  P.lidOpen=lerp(P.lidOpen,S.emoLidOpen,el);
+  P.lidUpperTilt=lerp(P.lidUpperTilt,S.emoLidUpperTilt,el);
+  P.lidLowerTilt=lerp(P.lidLowerTilt,S.emoLidLowerTilt,el);
+  P.lidSlant=lerp(P.lidSlant,S.emoLidSlant,el);
+  P.lidLowerRatio=lerp(P.lidLowerRatio,S.emoLidLowerRatio,el);
+  P.lidWidth=lerp(P.lidWidth,S.emoLidWidth,el);
+
+  // Gaze
+  updateGazeMode(dt);
+  const sm=S.gazeMode==='jumpscare'&&S.lurkLooking?0.18:P.smoothing;
+  S.currentX+=(S.targetX-S.currentX)*sm;
+  S.currentY+=(S.targetY-S.currentY)*sm;
+  S.currentZ+=(S.targetZ-S.currentZ)*sm*0.5;
+  const tgtV=P.vergenceBase+Math.max(0,S.currentZ-0.35)*P.vergenceMax;
+  S.currentVergence+=(tgtV-S.currentVergence)*sm*0.7;
+
+  const gx=Math.max(-1,Math.min(1,S.currentX)),gy=Math.max(-1,Math.min(1,S.currentY));
+  const maxRot=Math.PI/5,gr=P.globeRotate;
+
+  // Apply gaze via globe rotation (for 3D model, rotation is the primary gaze method)
+  const lp=leftG.getObjectByName('pivot');
+  if(lp){
+    lp.rotation.y=gx*maxRot*gr+(P.cyclops<0.5?S.currentVergence:0);
+    lp.rotation.x=-gy*maxRot*gr;
+  }
+  if(P.cyclops<0.5){
+    const rp=rightG.getObjectByName('pivot');
+    if(rp){rp.rotation.y=gx*maxRot*gr-S.currentVergence;rp.rotation.x=-gy*maxRot*gr;}
+  }
+
+  // Eyelids
+  updBlink(dt);const ba=blinkAmt();
+  const effOpen=P.lidOpen*(1.0-ba);
+  const upperAng=effOpen*0.7+P.lidUpperTilt;
+  const lowerAng=effOpen*P.lidLowerRatio*0.7+P.lidLowerTilt;
+
+  const eyes=P.cyclops>0.5?[leftG]:[leftG,rightG];
+  eyes.forEach((g,i)=>{
+    const wrap=g.getObjectByName('lidWrap');
+    if(!wrap)return;
+    const ul=wrap.getObjectByName('upperLid'),ll=wrap.getObjectByName('lowerLid');
+    ul.rotation.x=-upperAng;ll.rotation.x=lowerAng;
+    ul.scale.x=P.lidWidth;ll.scale.x=P.lidWidth;
+    ul.scale.z=1.0+P.lidThickness;ll.scale.z=1.0+P.lidThickness*0.7;
+    const slantSign=P.cyclops>0.5?0:(i===0?1:-1);
+    wrap.rotation.z=P.lidSlant*slantSign;
+  });
+
+  renderer.render(scene,camera);
+}
+
+// ============================================================
+// UTILS
+// ============================================================
+function toggleFS(){const el=document.documentElement;if(!document.fullscreenElement&&!document.webkitFullscreenElement)(el.requestFullscreen||el.webkitRequestFullscreen).call(el);else(document.exitFullscreen||document.webkitExitFullscreen).call(document);}
+function setStatus(t,x){document.getElementById('status-dot').className='dot '+t;document.getElementById('status-text').textContent=x;}
+function onResize(){camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);}
+
+// ============================================================
+// INIT
+// ============================================================
+async function init(){
+  initThree();
+  initPanel();
+  schedBlink();
+  applyEmotion('neutral');
+  animate(); // start render loop (will skip until model loads)
+
+  try{
+    document.getElementById('loading-status').textContent='Loading 3D eye model...';
+    const eyeModel=await loadEyeModel();
+    createEyeGroup(eyeModel);
+    document.getElementById('loading-status').textContent='Initializing tracking...';
+    await initTracking();
+  }catch(err){
+    console.error('Model load error:',err);
+    document.getElementById('loading-status').textContent='Error loading model';
+    document.getElementById('loading').classList.add('hidden');
+    initPointerFallback();
+  }
+}
+init();
+</script>
+</body>
+</html>
