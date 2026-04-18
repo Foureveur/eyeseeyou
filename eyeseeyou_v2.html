@@ -239,6 +239,22 @@ const blinkConfig = {
   speedMax: 9,               // max
 };
 
+// V2.4: pupil focus tunables
+const pupilFocusConfig = {
+  saccadeConstriction: 0.25,  // morph spike on each microsaccade (decays ~280ms)
+  depthAccommodationRange: 0.12,  // ± range based on viewer proximity
+  responseSpeed: 12,          // spring-like speed of offset transition
+};
+
+// V2.4: heartbeat pulse — subtle pupil dilation timed to a cardiac rhythm.
+// Coupled with state.tension (stressed = faster BPM).
+const heartbeat = {
+  enabled: false,
+  bpm: 72,                    // baseline BPM (tension modulates: 60..120)
+  pulseStrength: 0.05,        // pupil dilation amplitude per beat
+  tensionCouple: true,        // true = tension drives BPM
+};
+
 // Restore v2-specific saved prefs (state + vitals + convergence + blink)
 try {
   const s = localStorage.getItem('eyeseeyou_v2_state');      if (s) Object.assign(state, JSON.parse(s));
@@ -1618,14 +1634,17 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       // Consequence: the eye CLOSER to the viewer's lateral position rotates LESS,
       // the FAR eye rotates MORE. This is the real parallax that V1 lacked.
       //
-      // V2.2: Much closer default faceDist so the differential is visibly strong.
-      // Previously faceDist at faceZ=0.5 was 0.95; now 0.7 → stronger convergence angles.
-      const faceDist = lerp(1.2, 0.3, faceZ);     // near=0.3, far=1.2 (was 0.4..1.5)
-      const trackingScaleX = 1.0;                  // amplified lateral sweep (was 0.8)
-      const trackingScaleY = 0.7;                  // was 0.6
+      // V2.4: fix scale — the rig uses WORLD units where eyes are spaced ~1.8 apart.
+      // Previously faceDist ≈ 0.75 caused extreme cross-eye (vergence angle ~50° even
+      // when centered). Real humans at arm's length have ~3–5° vergence. Moving the
+      // viewer to physically plausible distances (far=25 units, near=4) gives
+      // natural-looking angles that still shift per-eye differentially.
+      const faceDist = lerp(25, 4, faceZ);       // far=25, near=4 world units
+      const trackingScaleX = 12.0;                // lateral sweep scaled to match faceDist
+      const trackingScaleY = 8.0;
       const faceWorld = new THREE.Vector3(
-        gx * faceDist * trackingScaleX,
-        -gy * faceDist * trackingScaleY,
+        gx * trackingScaleX,                     // lateral offset from center (not scaled by dist — gx already normalized)
+        -gy * trackingScaleY,
         faceDist
       );
       const _scratch = new THREE.Vector3();
@@ -2122,15 +2141,29 @@ class EyeController {
     const blinkAmount = this.getBlinkAmount();
     this.eyelidController.update(dt, baseTop, baseBot, g.currentY, blinkAmount);
 
-    // V2.1+V2.2: pupil accommodation — "mise au point" feel. Boosted amplitudes.
-    //   (a) saccade constriction: +0.25 morph spike on each microsaccade, decays over 280ms
-    //   (b) depth accommodation: ±0.12 morph range based on viewer proximity
+    // V2.4: pupil accommodation — "mise au point" + heartbeat pulse, all parametric.
     const pf = this._pupilFocus;
     pf.constrictionTimer = Math.max(0, pf.constrictionTimer - dt);
-    const saccadeConstrict = pf.constrictionTimer > 0 ? 0.25 * (pf.constrictionTimer / 0.28) : 0;
-    const depthOffset = (this.face.z - 0.5) * 0.24;   // -0.12 far .. +0.12 near (was 0.08)
-    pf.targetOffset = saccadeConstrict + depthOffset;
-    pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * 12);
+    // (a) saccade constriction — scaled by pupilFocusConfig.saccadeConstriction
+    const saccadeConstrict = pf.constrictionTimer > 0
+      ? pupilFocusConfig.saccadeConstriction * (pf.constrictionTimer / 0.28)
+      : 0;
+    // (b) depth accommodation — scaled by pupilFocusConfig.depthAccommodationRange
+    const depthOffset = (this.face.z - 0.5) * pupilFocusConfig.depthAccommodationRange * 2;
+    // (c) heartbeat pulse — sine at BPM frequency
+    let pulse = 0;
+    if (heartbeat.enabled) {
+      const effectiveBpm = heartbeat.tensionCouple
+        ? lerp(heartbeat.bpm, heartbeat.bpm * 1.7, state.tension)
+        : heartbeat.bpm;
+      pf.heartPhase = (pf.heartPhase || 0) + dt * (effectiveBpm / 60);
+      // Asymmetric pulse: quick systole (narrow peak) then diastole (longer valley)
+      const phase = pf.heartPhase % 1;
+      const systole = phase < 0.12 ? Math.sin(phase / 0.12 * Math.PI) : 0;
+      pulse = systole * heartbeat.pulseStrength;
+    }
+    pf.targetOffset = saccadeConstrict + depthOffset + pulse;
+    pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * pupilFocusConfig.responseSpeed);
   }
 
   getGaze() {
@@ -2824,9 +2857,24 @@ async function main() {
   gBlink.close();
   const gConv = gui.addFolder('Per-eye tracking');
   gConv.add(convergenceEnabled, 'enabled').name('per-eye tracking ON/OFF');
-  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus (accommodation)');
   gConv.add(convergenceEnabled, 'showDebugHud').name('DEBUG HUD (show angles)');
   gConv.close();
+
+  // V2.4: pupil focus fine controls
+  const gPupil = gui.addFolder('Pupil focus');
+  gPupil.add(convergenceEnabled, 'pupilFocus').name('enabled');
+  gPupil.add(pupilFocusConfig, 'saccadeConstriction', 0, 0.8, 0.01).name('saccade constrict');
+  gPupil.add(pupilFocusConfig, 'depthAccommodationRange', 0, 0.4, 0.01).name('depth accommodation');
+  gPupil.add(pupilFocusConfig, 'responseSpeed', 1, 30, 0.5).name('response speed');
+  gPupil.close();
+
+  // V2.4: heartbeat mode — coupled with tension
+  const gHeart = gui.addFolder('Heartbeat');
+  gHeart.add(heartbeat, 'enabled').name('enabled');
+  gHeart.add(heartbeat, 'bpm', 40, 150, 1).name('BPM');
+  gHeart.add(heartbeat, 'pulseStrength', 0, 0.3, 0.01).name('pulse strength');
+  gHeart.add(heartbeat, 'tensionCouple').name('tension drives BPM');
+  gHeart.close();
 
   // V2.3: live webcam + tracking overlay — see what the machine sees
   const tracking = { showWebcam: false };
