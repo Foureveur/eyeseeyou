@@ -2915,9 +2915,9 @@ async function main() {
   gConv.add(convergenceEnabled, 'showTargetMarker').name('show target marker (3D)').onChange(v => {
     if (renderer._targetMarker) renderer._targetMarker.visible = v;
   });
-  gConv.add(convergenceConfig, 'targetDistance', 2, 20, 0.5).name('target distance');
-  gConv.add(convergenceConfig, 'lateralScale', 0.5, 15, 0.5).name('lateral scale');
-  gConv.add(convergenceConfig, 'verticalScale', 0.5, 10, 0.5).name('vertical scale');
+  gConv.add(convergenceConfig, 'targetDistance', -20, 20, 0.5).name('target distance');
+  gConv.add(convergenceConfig, 'lateralScale', -15, 15, 0.5).name('lateral scale');
+  gConv.add(convergenceConfig, 'verticalScale', -10, 10, 0.5).name('vertical scale');
   gConv.close();
 
   // V2.4: pupil focus fine controls
