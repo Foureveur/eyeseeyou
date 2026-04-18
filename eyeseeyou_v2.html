@@ -805,9 +805,18 @@ class EyeRenderer {
     if (this._envMode !== 'video' || !this._envCubeCamera) return;
     this._envFrameCount++;
     if (this._envFrameCount % 4 !== 0) return;
+    // V2.9: hide the eye rig during cube capture so we don't end up reflecting
+    // the eyes onto themselves (was producing the weird recursive pattern on cornea).
+    // Also hide the target marker (debug sphere) and any overlay geometry.
+    const eyeVisible = this.eyeGroup.visible;
+    const targetVisible = this._targetMarker ? this._targetMarker.visible : false;
+    this.eyeGroup.visible = false;
+    if (this._targetMarker) this._targetMarker.visible = false;
     this._envSphere.visible = true;
     this._envCubeCamera.update(this.renderer, this.scene);
     this._envSphere.visible = false;
+    this.eyeGroup.visible = eyeVisible;
+    if (this._targetMarker) this._targetMarker.visible = targetVisible;
   }
 
   _setupLights() {
