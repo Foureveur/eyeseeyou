@@ -243,6 +243,12 @@ const convergenceConfig = {
   verticalScale: 4.0,     // vertical shift — boosted for visibility (was 2.5, too subtle)
 };
 
+// V2.8: eyelid ↔ gaze coupling strength (was hardcoded EyeMech 0.8/0.4)
+const gazeCoupling = {
+  topCoef: 0.35,   // upper lid follows gaze.y — 0 = lids static, 1 = extreme
+  botCoef: 0.18,
+};
+
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
 const blinkConfig = {
   intervalMean: 4.0,         // seconds — average time between blinks
@@ -1927,12 +1933,12 @@ class EyelidController {
   // blinkAmount: 0..1 (0 = no blink, 1 = fully closed)
   update(dt, baseTop, baseBot, gazeY, blinkAmount) {
     // --- Gaze coupling (Tâche 3) ---
-    // EyeMech Epsilon control_ud_and_lids coefficients: top 0.8, bot 0.4
-    // When looking up: top opens more, bot opens more (both move up)
-    // When looking down: top closes more, bot stays (follows gaze down)
+    // V2.8: tunable coefs (was hardcoded EyeMech 0.8/0.4 — too strong, made the
+    // lids appear to be doing all the vertical tracking while the iris's smaller
+    // pitch got visually lost). Defaults now 0.35/0.18 — subtle but present.
     const udProgress = (gazeY + 1) * 0.5;     // 0 (down) .. 1 (up)
-    const topOffset = (udProgress - 0.5) * 0.8;
-    const botOffset = -(udProgress - 0.5) * 0.4;   // bottom compresses upward when looking up
+    const topOffset = (udProgress - 0.5) * gazeCoupling.topCoef;
+    const botOffset = -(udProgress - 0.5) * gazeCoupling.botCoef;
 
     // --- Blink overlay ---
     // Multiplicative — guarantees blink timing independent of spring physics
@@ -2920,6 +2926,8 @@ async function main() {
   gConv.add(convergenceConfig, 'targetDistance', -20, 20, 0.5).name('target distance');
   gConv.add(convergenceConfig, 'lateralScale', -15, 15, 0.5).name('lateral scale');
   gConv.add(convergenceConfig, 'verticalScale', -10, 10, 0.5).name('vertical scale');
+  gConv.add(gazeCoupling, 'topCoef', 0, 1.5, 0.01).name('lid coupling TOP');
+  gConv.add(gazeCoupling, 'botCoef', 0, 1.5, 0.01).name('lid coupling BOT');
   gConv.close();
 
   // V2.4: pupil focus fine controls
