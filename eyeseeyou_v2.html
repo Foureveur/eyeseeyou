@@ -1725,6 +1725,99 @@ class EyeRenderer {
 
 
 // ============================================================
+// V2 — SPRING EYELID (behavioral physics, EyeMech convergence)
+// ============================================================
+// Convention: position ∈ [0..1], 1 = fully open, 0 = fully closed.
+// angleMin/angleMax map to EyeMech Epsilon servo degrees:
+//   TL: 90→170 (top-left)    |  TR: 90→10 (top-right, inverted)
+//   BL: 90→10 (bottom-left)  |  BR: 90→160 (bottom-right)
+// toServoAngle() returns the degree value that a real servo would drive.
+class SpringEyelid {
+  constructor({ stiffness = 180, damping = 18, angleMin = 0, angleMax = 1, initial = 1.0 } = {}) {
+    this.position = initial;
+    this.velocity = 0;
+    this.target = initial;
+    this.stiffness = stiffness;
+    this.damping = damping;
+    this.angleMin = angleMin;
+    this.angleMax = angleMax;
+  }
+  update(dt) {
+    // Clamp dt to avoid huge steps (tab blur → dt spikes → spring explodes)
+    const clampedDt = Math.min(dt, 0.05);
+    const f = (this.target - this.position) * this.stiffness - this.velocity * this.damping;
+    this.velocity += f * clampedDt;
+    this.position += this.velocity * clampedDt;
+  }
+  updateFromState(state) {
+    // Fatigue: lower stiffness, higher damping → slow heavy lids
+    let k = lerp(180, 60, state.fatigue);
+    let d = lerp(18, 32, state.fatigue);
+    // Tension: higher stiffness, lower damping → snappy lids
+    k = lerp(k, 260, state.tension);
+    d = lerp(d, 12, state.tension);
+    this.stiffness = k;
+    this.damping = d;
+  }
+  toServoAngle() {
+    return this.angleMin + this.position * (this.angleMax - this.angleMin);
+  }
+}
+
+class EyelidController {
+  constructor() {
+    // 4 independent springs — mirrors EyeMech Epsilon servo layout for future mechanical drop-in
+    this.topL = new SpringEyelid({ angleMin: 90, angleMax: 170, initial: 1.0 });
+    this.topR = new SpringEyelid({ angleMin: 90, angleMax: 10,  initial: 1.0 });
+    this.botL = new SpringEyelid({ angleMin: 90, angleMax: 10,  initial: 1.0 });
+    this.botR = new SpringEyelid({ angleMin: 90, angleMax: 160, initial: 1.0 });
+  }
+  // baseTop / baseBot: desired openness ∈ [0..1] from emotion + user params
+  // gazeY: -1..+1 (positive = looking up)
+  // blinkAmount: 0..1 (0 = no blink, 1 = fully closed)
+  update(dt, baseTop, baseBot, gazeY, blinkAmount) {
+    // --- Gaze coupling (Tâche 3) ---
+    // EyeMech Epsilon control_ud_and_lids coefficients: top 0.8, bot 0.4
+    // When looking up: top opens more, bot opens more (both move up)
+    // When looking down: top closes more, bot stays (follows gaze down)
+    const udProgress = (gazeY + 1) * 0.5;     // 0 (down) .. 1 (up)
+    const topOffset = (udProgress - 0.5) * 0.8;
+    const botOffset = -(udProgress - 0.5) * 0.4;   // bottom compresses upward when looking up
+
+    // --- Blink overlay ---
+    // Multiplicative — guarantees blink timing independent of spring physics
+    const blinkMul = 1 - blinkAmount;
+
+    const tTop = THREE.MathUtils.clamp((baseTop + topOffset) * blinkMul, 0, 1);
+    const tBot = THREE.MathUtils.clamp((baseBot + botOffset) * blinkMul, 0, 1);
+
+    // Apply targets, update physics. L and R share the same target for now (symmetric).
+    // Future: asymmetric blink / expression could drive topL ≠ topR.
+    for (const s of [this.topL, this.topR, this.botL, this.botR]) {
+      s.updateFromState(state);
+    }
+    this.topL.target = tTop; this.topR.target = tTop;
+    this.botL.target = tBot; this.botR.target = tBot;
+    for (const s of [this.topL, this.topR, this.botL, this.botR]) {
+      s.update(dt);
+    }
+  }
+  // Unified outputs (average of L/R for symmetric render paths)
+  getTopOpenness() { return (this.topL.position + this.topR.position) * 0.5; }
+  getBotOpenness() { return (this.botL.position + this.botR.position) * 0.5; }
+  // Future-use: servo angles for EyeMech Epsilon physical eyes
+  getServoAngles() {
+    return {
+      TL: this.topL.toServoAngle(),
+      TR: this.topR.toServoAngle(),
+      BL: this.botL.toServoAngle(),
+      BR: this.botR.toServoAngle(),
+    };
+  }
+}
+
+
+// ============================================================
 // EYE CONTROLLER — behavior state (will be replaced by eyemech)
 // ============================================================
 class EyeController {
@@ -1784,6 +1877,10 @@ class EyeController {
       saccadeSettleTime: 0,   // cooldown after saccade before pursuit resumes
     };
     this.face = { x: 0, y: 0, z: 0.5, detected: false, lastTime: 0 };
+    // V2: spring-based eyelid controller (replaces linear lidOpen lerp)
+    this.eyelidController = new EyelidController();
+    // V2: ocular tremor (added in Tâche 4)
+    this._tremor = null;  // lazy init once Math.random noise generator is set up
     this._scheduleBlink();
   }
 
@@ -1816,6 +1913,11 @@ class EyeController {
     const p = this.params;
     const lr = (a, b, t) => a + (b - a) * t;
     const el = 0.055;
+    // V2: p.lidOpen is NOT lerped here anymore — EyelidController springs handle it.
+    // We interpolate the TARGET (emotion target) into params.lidOpen so user/emotion
+    // choices flow through to the spring target, but the spring itself does the physics.
+    // Using a short lerp here mostly preserves V1 behavior where params.lidOpen is
+    // still readable by UI sliders; the spring target reads it each frame.
     p.lidOpen = lr(p.lidOpen, this._emoTargets.lidOpen, el);
     p.lidUpperTilt = lr(p.lidUpperTilt, this._emoTargets.lidUpperTilt, el);
     p.lidLowerTilt = lr(p.lidLowerTilt, this._emoTargets.lidLowerTilt, el);
@@ -1867,6 +1969,14 @@ class EyeController {
     const tgtV = p.vergenceBase + Math.max(0, g.currentZ - 0.35) * p.vergenceMax;
     g.vergence += (tgtV - g.vergence) * sm * 0.7;
     this._updateBlink(dt);
+
+    // V2: Drive spring-based eyelids.
+    // baseTop/baseBot: openness targets ∈ [0..1] derived from params.lidOpen + lidLowerRatio.
+    // Gaze Y feeds EyelidController for natural coupling (Tâche 3).
+    const baseTop = p.lidOpen;
+    const baseBot = p.lidOpen * p.lidLowerRatio;
+    const blinkAmount = this.getBlinkAmount();
+    this.eyelidController.update(dt, baseTop, baseBot, g.currentY, blinkAmount);
   }
 
   getGaze() {
@@ -2519,10 +2629,11 @@ async function main() {
     const gaze = controller.getGaze();
     renderer.setGaze(gaze.x, gaze.y, gaze.vergence, p.globeRotate, cyclops, controller.face.z, convergenceEnabled.enabled);
 
-    const ba = controller.getBlinkAmount();
-    const effOpen = p.lidOpen * (1.0 - ba);
-    const upperAng = effOpen * 0.7 + p.lidUpperTilt;
-    const lowerAng = effOpen * p.lidLowerRatio * 0.7 + p.lidLowerTilt;
+    // V2: use spring-based openness from EyelidController instead of raw p.lidOpen * (1-ba)
+    const topOpenness = controller.eyelidController.getTopOpenness();
+    const botOpenness = controller.eyelidController.getBotOpenness();
+    const upperAng = topOpenness * 0.7 + p.lidUpperTilt;
+    const lowerAng = botOpenness * 0.7 + p.lidLowerTilt;
     renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, cyclops);
 
     renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, cyclops);
