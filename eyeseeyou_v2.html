@@ -1189,6 +1189,26 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       sheen: 0.5, sheenColor: new THREE.Color(0xffccbb),
       side: THREE.BackSide, depthWrite: true, depthTest: true,
     });
+    // V2.2: propagate SSS warm rim to inner lid material too.
+    // Critical because the lower lid's VISIBLE surface is actually the inner mesh
+    // (outer mesh's normals face away → back-face culled). Without this patch, the
+    // lower lid reads as flat/transparent vs. the upper lid's full materiality.
+    innerLidMat.userData.sssIntensity = { value: 0.22 };
+    innerLidMat.onBeforeCompile = (shader) => {
+      shader.uniforms.sssIntensity = innerLidMat.userData.sssIntensity;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `
+#include <common>
+uniform float sssIntensity;
+`)
+        .replace('#include <dithering_fragment>', `
+#include <dithering_fragment>
+// V2 SSS warm rim (inner lid — visible side on lower lid)
+float _rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
+vec3 _warm = vec3(0.90, 0.35, 0.25);
+gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
+`);
+    };
     const edgeMat = new THREE.MeshPhysicalMaterial({
       color: 0xbb7066, roughness: 0.4, metalness: 0.0,
       side: THREE.DoubleSide, depthWrite: true, depthTest: true,
@@ -2680,23 +2700,30 @@ async function main() {
   ui.init();
 
   // V2 — lil-gui panel for behavioral state + vitals + convergence toggles
-  const gui = new GUI({ title: 'V2 · Behavior', width: 260 });
-  gui.domElement.style.top = '60px';
-  const gState = gui.addFolder('🧠 State (future Gemma)');
+  const gui = new GUI({ title: 'V2 · Behavior', width: 230 });
+  // Position: below the status top-left area, on the left side so it doesn't clash
+  // with the right-side settings panel (#panel slides in from right).
+  gui.domElement.style.top = '48px';
+  gui.domElement.style.left = '14px';
+  gui.domElement.style.right = 'auto';
+  gui.domElement.classList.add('ui-layer');   // fade out in immersed mode
+  const gState = gui.addFolder('State');
   const onStateChange = () => controller.resetVitalsSchedule();
   gState.add(state, 'curiosity', 0, 1, 0.01).onChange(onStateChange);
   gState.add(state, 'fatigue', 0, 1, 0.01).onChange(onStateChange);
   gState.add(state, 'tension', 0, 1, 0.01).onChange(onStateChange);
   gState.add(state, 'alertness', 0, 1, 0.01).onChange(onStateChange);
-  const gVitals = gui.addFolder('❤️ Vitals (slow wandering drift · microsaccades jumps · tremor jitter · involuntary blinks)');
-  gVitals.add(vitalsEnabled, 'drift').name('drift (slow wander)');
-  gVitals.add(vitalsEnabled, 'microsaccades').name('microsaccades (jumps)');
-  gVitals.add(vitalsEnabled, 'tremor').name('tremor (jitter)');
-  gVitals.add(vitalsEnabled, 'blinks').name('blinks (involuntary)');
-  const gConv = gui.addFolder('🎯 Convergence 3D');
+  const gVitals = gui.addFolder('Vitals');
+  gVitals.add(vitalsEnabled, 'drift').name('drift');
+  gVitals.add(vitalsEnabled, 'microsaccades').name('microsaccades');
+  gVitals.add(vitalsEnabled, 'tremor').name('tremor');
+  gVitals.add(vitalsEnabled, 'blinks').name('blinks');
+  gVitals.close();  // start collapsed
+  const gConv = gui.addFolder('Convergence');
   gConv.add(convergenceEnabled, 'enabled').name('3D convergence');
-  gConv.add(convergenceEnabled, 'flipHorizontal').name('flip horizontal (A/B)');
-  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus (depth)');
+  gConv.add(convergenceEnabled, 'flipHorizontal').name('flip horizontal');
+  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus');
+  gConv.close();  // start collapsed
 
   // Start tracking
   setLoadingStatus('Initializing tracking...');
