@@ -58,6 +58,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
 <video id="webcam-debug" autoplay playsinline muted></video>
 <div id="panel-toggle" class="ui-layer">&#9881;</div>
 <div id="immerse-btn" class="ui-layer">Immerse</div>
+<div id="debug-hud" class="ui-layer" style="position:fixed;bottom:14px;right:14px;z-index:250;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:10px;line-height:1.6;color:rgba(255,255,255,0.85);letter-spacing:0.5px;display:none;pointer-events:none;"></div>
 
 <div id="panel" class="ui-layer">
   <h3>Iris</h3>
@@ -221,9 +222,11 @@ const vitalsEnabled = {
 };
 
 const convergenceEnabled = {
-  enabled: true,
-  flipHorizontal: false,  // A/B toggle — user feedback says parallax direction may be inverted
-  pupilFocus: true,       // pupil dilates/constricts based on viewer distance (accommodation illusion)
+  enabled: true,          // Per-eye viewer tracking: each eye rotates independently toward viewer's 3D position.
+                          // When on, near eye rotates less, far eye rotates more — real parallax.
+                          // When off, both eyes rotate in parallel (V1 behavior, for A/B comparison).
+  pupilFocus: true,       // Pupil accommodation: constricts after saccades (~280ms) + slight dilation on proximity.
+  showDebugHud: false,    // Live overlay showing yaw/pitch of each eye + pupil offset — verify the effect empirically.
 };
 
 // Restore v2-specific saved prefs (state + vitals + convergence)
@@ -1584,19 +1587,17 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
     const listingK = 0.12;  // Listing's law torsion coefficient
 
     if (convergenceOn) {
-      // V2: True 3D convergence — each eye points at the viewer's 3D position.
-      // Emergent vergence: close viewer → strong convergence; far → near-parallel.
+      // V2: Per-eye viewer tracking — each eye independently points at the viewer's 3D position.
+      // Consequence: the eye CLOSER to the viewer's lateral position rotates LESS,
+      // the FAR eye rotates MORE. This is the real parallax that V1 lacked.
       //
-      // gx/gy are in the canonical normalized frame [-1..1] (from controller.getGaze()).
-      // faceZ ∈ [0..1] where 0=far, 1=near.
-      // Build a target world position, then compute per-eye yaw/pitch from that eye's world pos.
-      const faceDist = lerp(1.5, 0.4, faceZ);             // world Z distance to viewer
-      const trackingScaleX = 0.8;                          // how far lateral sweep is
-      const trackingScaleY = 0.6;
-      // V2.1: A/B toggle in case parallax direction feels inverted
-      const xSign = convergenceEnabled.flipHorizontal ? -1 : 1;
+      // V2.2: Much closer default faceDist so the differential is visibly strong.
+      // Previously faceDist at faceZ=0.5 was 0.95; now 0.7 → stronger convergence angles.
+      const faceDist = lerp(1.2, 0.3, faceZ);     // near=0.3, far=1.2 (was 0.4..1.5)
+      const trackingScaleX = 1.0;                  // amplified lateral sweep (was 0.8)
+      const trackingScaleY = 0.7;                  // was 0.6
       const faceWorld = new THREE.Vector3(
-        xSign * gx * faceDist * trackingScaleX,
+        gx * faceDist * trackingScaleX,
         -gy * faceDist * trackingScaleY,
         faceDist
       );
@@ -1616,10 +1617,18 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
         _dir.applyQuaternion(parentQuat.invert());
         const yaw = Math.atan2(_dir.x, _dir.z);
         const pitch = Math.asin(THREE.MathUtils.clamp(-_dir.y, -1, 1));
-        eye.pivot.rotation.y = THREE.MathUtils.clamp(yaw, -maxRot * 1.2, maxRot * 1.2);
-        eye.pivot.rotation.x = THREE.MathUtils.clamp(pitch, -maxRot * 1.2, maxRot * 1.2);
+        // V2.2: wider clamp so the per-eye differential isn't squashed by limits.
+        // Humans can rotate eyes ~50° horizontally; maxRot = PI/5 = 36°, * 1.5 = 54° is realistic.
+        eye.pivot.rotation.y = THREE.MathUtils.clamp(yaw, -maxRot * 1.5, maxRot * 1.5);
+        eye.pivot.rotation.x = THREE.MathUtils.clamp(pitch, -maxRot * 1.5, maxRot * 1.5);
         eye.pivot.rotation.z = -eye.pivot.rotation.y * eye.pivot.rotation.x * listingK;
       }
+      // Stash raw angles for debug HUD
+      this._lastYaw = {
+        left: this.left?.pivot.rotation.y ?? 0,
+        right: this.right?.pivot.rotation.y ?? 0,
+        pitch: this.left?.pivot.rotation.x ?? 0,
+      };
     } else {
       // V1 fallback — parallel rotation with additive vergence (A/B comparison)
       if (this.left) {
@@ -2045,14 +2054,13 @@ class EyeController {
     const blinkAmount = this.getBlinkAmount();
     this.eyelidController.update(dt, baseTop, baseBot, g.currentY, blinkAmount);
 
-    // V2.1: pupil accommodation — "mise au point" feel.
-    // Two components:
-    //   (a) saccade constriction: brief +0.08 morph spike after each micro-saccade
-    //   (b) depth accommodation: close viewer → slight dilation (morph +0.04), far → constriction
+    // V2.1+V2.2: pupil accommodation — "mise au point" feel. Boosted amplitudes.
+    //   (a) saccade constriction: +0.25 morph spike on each microsaccade, decays over 280ms
+    //   (b) depth accommodation: ±0.12 morph range based on viewer proximity
     const pf = this._pupilFocus;
     pf.constrictionTimer = Math.max(0, pf.constrictionTimer - dt);
-    const saccadeConstrict = pf.constrictionTimer > 0 ? 0.10 * (pf.constrictionTimer / 0.28) : 0;
-    const depthOffset = (this.face.z - 0.5) * 0.08;   // -0.04 far .. +0.04 near
+    const saccadeConstrict = pf.constrictionTimer > 0 ? 0.25 * (pf.constrictionTimer / 0.28) : 0;
+    const depthOffset = (this.face.z - 0.5) * 0.24;   // -0.12 far .. +0.12 near (was 0.08)
     pf.targetOffset = saccadeConstrict + depthOffset;
     pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * 12);
   }
@@ -2719,11 +2727,11 @@ async function main() {
   gVitals.add(vitalsEnabled, 'tremor').name('tremor');
   gVitals.add(vitalsEnabled, 'blinks').name('blinks');
   gVitals.close();  // start collapsed
-  const gConv = gui.addFolder('Convergence');
-  gConv.add(convergenceEnabled, 'enabled').name('3D convergence');
-  gConv.add(convergenceEnabled, 'flipHorizontal').name('flip horizontal');
-  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus');
-  gConv.close();  // start collapsed
+  const gConv = gui.addFolder('Per-eye tracking');
+  gConv.add(convergenceEnabled, 'enabled').name('per-eye tracking ON/OFF');
+  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus (accommodation)');
+  gConv.add(convergenceEnabled, 'showDebugHud').name('DEBUG HUD (show angles)');
+  gConv.close();
 
   // Start tracking
   setLoadingStatus('Initializing tracking...');
@@ -2762,6 +2770,24 @@ async function main() {
       const pupilOffset = controller.getPupilFocusOffset();
       const basePupil = p.pupilSize;
       renderer.setMorphTarget('pupilSize', Math.max(0.02, Math.min(1.0, basePupil + pupilOffset)));
+    }
+
+    // V2.2: Debug HUD — live yaw/pitch/pupil values so user can verify the per-eye tracking
+    const hud = document.getElementById('debug-hud');
+    if (convergenceEnabled.showDebugHud) {
+      hud.style.display = 'block';
+      const y = renderer._lastYaw || { left: 0, right: 0, pitch: 0 };
+      const toDeg = r => (r * 180 / Math.PI).toFixed(1);
+      const pupilOff = controller.getPupilFocusOffset();
+      hud.textContent = `face.x=${controller.face.x.toFixed(2)}  face.z=${controller.face.z.toFixed(2)}
+L-eye yaw:  ${toDeg(y.left)}°
+R-eye yaw:  ${toDeg(y.right)}°
+Δ (diff):   ${toDeg(y.left - y.right)}°
+pitch:      ${toDeg(y.pitch)}°
+pupil Δ:    ${pupilOff >= 0 ? '+' : ''}${pupilOff.toFixed(3)}  ${pupilOff > 0.02 ? '● CONSTRICT' : ''}`;
+      hud.style.whiteSpace = 'pre';
+    } else {
+      hud.style.display = 'none';
     }
 
     renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, cyclops);
