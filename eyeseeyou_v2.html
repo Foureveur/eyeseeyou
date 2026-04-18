@@ -229,7 +229,11 @@ const convergenceEnabled = {
   pupilFocus: true,       // Pupil accommodation: constricts after saccades (~280ms) + slight dilation on proximity.
   showDebugHud: false,    // Live overlay showing yaw/pitch of each eye + pupil offset.
   showTargetMarker: false,// Render a small red sphere at the gaze target — visualize where eyes aim.
-  mirrorFaceX: false,     // Flip face.x sign. Depends on webcam mirror convention of user's browser.
+};
+
+// V2.6: camera feed display prefs (pure visual, no tracking effect)
+const cameraDisplay = {
+  mirror: true,           // CSS flip of the webcam video + overlay — natural selfie view
 };
 
 // V2.5: per-eye tracking tunables (ad-hoc proportions of the oversized eye rig)
@@ -2429,9 +2433,7 @@ class FaceTracker {
         const f = preds[0], re = f.landmarks[0], le = f.landmarks[1];
         const cx = (re[0] + le[0]) / 2 / this.video.videoWidth, cy = (re[1] + le[1]) / 2 / this.video.videoHeight;
         const ed = Math.sqrt(Math.pow((re[0] - le[0]) / this.video.videoWidth, 2) + Math.pow((re[1] - le[1]) / this.video.videoHeight, 2));
-        // V2.5: mirror toggle compensates for browsers that don't auto-mirror the front cam
-        const mirrorSign = convergenceEnabled.mirrorFaceX ? 1 : -1;
-        this.controller.face.x = mirrorSign * (cx * 2 - 1) * p.sensitivity + p.parallaxX;
+        this.controller.face.x = -(cx * 2 - 1) * p.sensitivity + p.parallaxX;
         this.controller.face.y = -(cy * 2 - 1) * p.sensitivity + p.parallaxY;
         this.controller.face.z = Math.min(1.0, ed * 4.0);
         this.controller.face.detected = true;
@@ -2938,15 +2940,22 @@ async function main() {
   gHeart.add(heartbeat, 'tensionCouple').name('tension drives BPM');
   gHeart.close();
 
-  // V2.3+V2.5: live webcam + tracking overlay + mirror toggle
+  // V2.3+V2.6: live webcam + tracking overlay + mirror (DISPLAY ONLY)
   const tracking = { showWebcam: false };
   const gTrack = gui.addFolder('Camera feed');
+  const applyMirrorCss = () => {
+    const t = cameraDisplay.mirror ? 'scaleX(-1)' : 'scaleX(1)';
+    document.getElementById('webcam-debug').style.transform = t;
+    document.getElementById('webcam-overlay').style.transform = t;
+  };
   gTrack.add(tracking, 'showWebcam').name('show webcam + face bbox').onChange(v => {
     document.getElementById('webcam-debug').style.display = v ? 'block' : 'none';
     document.getElementById('webcam-overlay').style.display = v ? 'block' : 'none';
+    applyMirrorCss();
   });
-  gTrack.add(convergenceEnabled, 'mirrorFaceX').name('mirror (flip horizontal)');
+  gTrack.add(cameraDisplay, 'mirror').name('mirror (display only)').onChange(applyMirrorCss);
   gTrack.close();
+  applyMirrorCss();
 
   // Start tracking
   setLoadingStatus('Initializing tracking...');
