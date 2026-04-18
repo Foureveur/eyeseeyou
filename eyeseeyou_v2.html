@@ -220,7 +220,18 @@ const vitalsEnabled = {
   blinks: true,
 };
 
-const convergenceEnabled = { enabled: true };
+const convergenceEnabled = {
+  enabled: true,
+  flipHorizontal: false,  // A/B toggle — user feedback says parallax direction may be inverted
+  pupilFocus: true,       // pupil dilates/constricts based on viewer distance (accommodation illusion)
+};
+
+// Restore v2-specific saved prefs (state + vitals + convergence)
+try {
+  const s = localStorage.getItem('eyeseeyou_v2_state');      if (s) Object.assign(state, JSON.parse(s));
+  const v = localStorage.getItem('eyeseeyou_v2_vitals');     if (v) Object.assign(vitalsEnabled, JSON.parse(v));
+  const c = localStorage.getItem('eyeseeyou_v2_conv');       if (c) Object.assign(convergenceEnabled, JSON.parse(c));
+} catch (e) {}
 
 // Shared small utils
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -1251,16 +1262,8 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       lashMesh.renderOrder = 3.5;
       grp.add(lashMesh);
 
-      // Shadow strip on sclera (upper lid only casts meaningful shadow)
-      if (isUpper) {
-        const shGeo = createShadowStripGeometry(lidR * 0.998, segsU, isUpper, lidParams);
-        const shMat = shadowMat.clone();
-        const shMesh = new THREE.Mesh(shGeo, shMat);
-        shMesh.name = 'shadow';
-        shMesh.renderOrder = 2.5;
-        grp.add(shMesh);
-        this._lidShadowMats.push(shMat);
-      }
+      // V2: shadow strip mesh removed — was clipping and looking fake.
+      // Proper eyelid contact shadow should be shader-driven (future Tâche 1.1 redo).
 
       lidWrap.add(grp);
     }
@@ -1570,8 +1573,10 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       const faceDist = lerp(1.5, 0.4, faceZ);             // world Z distance to viewer
       const trackingScaleX = 0.8;                          // how far lateral sweep is
       const trackingScaleY = 0.6;
+      // V2.1: A/B toggle in case parallax direction feels inverted
+      const xSign = convergenceEnabled.flipHorizontal ? -1 : 1;
       const faceWorld = new THREE.Vector3(
-        gx * faceDist * trackingScaleX,
+        xSign * gx * faceDist * trackingScaleX,
         -gy * faceDist * trackingScaleY,
         faceDist
       );
@@ -1788,7 +1793,8 @@ class SpringEyelid {
 // ~0.025° real — below conscious perception but crucial for "alive" feel.
 class OcularTremor {
   sample(state) {
-    const amp = 0.0005 * (1 + state.tension * 0.5);
+    // V2.1: boosted tension impact for visibility (was * 0.5 → now × 4)
+    const amp = 0.0008 * (1 + state.tension * 4);
     return { x: (Math.random() - 0.5) * amp * 2, y: (Math.random() - 0.5) * amp * 2 };
   }
 }
@@ -1910,7 +1916,19 @@ class EyeController {
     this.eyelidController = new EyelidController();
     // V2: ocular tremor layer (new in V2 — not in EyeMech, mechanical servos can't)
     this._tremor = new OcularTremor();
+    // V2.1: pupil accommodation — constricts briefly on saccade, dilates with depth proximity
+    this._pupilFocus = { offset: 0, constrictionTimer: 0, targetOffset: 0 };
     this._scheduleBlink();
+  }
+
+  // V2.1: called by _updateMicro when a saccade fires
+  _triggerPupilConstriction() {
+    this._pupilFocus.constrictionTimer = 0.28;   // ~280ms constriction event
+  }
+
+  // V2.1: offset to add to params.pupilSize each frame (range roughly -0.04 .. +0.08)
+  getPupilFocusOffset() {
+    return this._pupilFocus.offset;
   }
 
   get gazeMode() { return this._gazeMode; }
@@ -2006,6 +2024,17 @@ class EyeController {
     const baseBot = p.lidOpen * p.lidLowerRatio;
     const blinkAmount = this.getBlinkAmount();
     this.eyelidController.update(dt, baseTop, baseBot, g.currentY, blinkAmount);
+
+    // V2.1: pupil accommodation — "mise au point" feel.
+    // Two components:
+    //   (a) saccade constriction: brief +0.08 morph spike after each micro-saccade
+    //   (b) depth accommodation: close viewer → slight dilation (morph +0.04), far → constriction
+    const pf = this._pupilFocus;
+    pf.constrictionTimer = Math.max(0, pf.constrictionTimer - dt);
+    const saccadeConstrict = pf.constrictionTimer > 0 ? 0.10 * (pf.constrictionTimer / 0.28) : 0;
+    const depthOffset = (this.face.z - 0.5) * 0.08;   // -0.04 far .. +0.04 near
+    pf.targetOffset = saccadeConstrict + depthOffset;
+    pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * 12);
   }
 
   getGaze() {
@@ -2062,7 +2091,7 @@ class EyeController {
 
     // --- Slow inter-saccadic drift (V2: modulated by state.fatigue) ---
     // Fatigue increases drift amplitude (eyes wander more when tired)
-    const driftAmp = lerp(1.0, 1.5, state.fatigue);
+    const driftAmp = lerp(1.0, 3.5, state.fatigue);   // V2.1: boosted for visibility
     const t = m.timer;
     if (vitalsEnabled.drift) {
       m.driftX += (Math.sin(t * 0.7) * 0.02 * driftAmp + Math.sin(t * 2.3) * 0.008 * driftAmp - m.driftX) * 0.02;
@@ -2077,6 +2106,7 @@ class EyeController {
       if (m.nextSaccadeIn <= 0) {
         m.saccadeActive = true;
         m.saccadeElapsed = 0;
+        this._triggerPupilConstriction();  // V2.1: mise au point — pupil constricts on saccade
         m.saccadeDur = 0.025 + Math.random() * 0.03;  // 25-55ms human microsaccade
         // Tension boosts amplitude slightly
         const ampBoost = lerp(1.0, 1.3, state.tension);
@@ -2139,13 +2169,21 @@ class EyeController {
   _scheduleBlink() {
     // Human blink interval: ~3-7s average, log-normal distribution.
     // V2: modulated by state.fatigue — tired eyes blink much more frequently.
-    const fatigueScale = lerp(1.0, 0.4, state.fatigue);      // fatigue=1 → 2.5× more frequent
+    // V2.1: timeout is cancellable so state changes can force reschedule.
+    if (this._blink.timer) clearTimeout(this._blink.timer);
+    const fatigueScale = lerp(1.0, 0.15, state.fatigue);   // fatigue=1 → ~6× more frequent (was 2.5×)
     const base = (2500 + Math.random() * 3500) * fatigueScale;
     const jitter = Math.random() < 0.15 ? Math.random() * 4000 * fatigueScale : 0;
-    setTimeout(() => {
+    this._blink.timer = setTimeout(() => {
       if (vitalsEnabled.blinks) this.triggerBlink();
       this._scheduleBlink();
     }, base + jitter);
+  }
+
+  // V2.1: force reschedule when state changes (used by lil-gui onChange)
+  resetVitalsSchedule() {
+    this._scheduleBlink();
+    this._micro.nextSaccadeIn = 0.05;  // next saccade almost immediately with new params
   }
 }
 
@@ -2353,15 +2391,21 @@ class DebugUI {
     document.addEventListener('touchstart', peekUI);
     document.addEventListener('keydown', e => { if (e.key === 'Escape') document.body.classList.remove('immersed', 'ui-peek'); });
 
-    // Make Default buttons
+    // Make Default buttons (V2: now saves params + state + vitals + convergence)
     document.getElementById('make-default-btn').addEventListener('click', () => {
       localStorage.setItem('eyeseeyou_defaults', JSON.stringify(this.ctrl.params));
+      localStorage.setItem('eyeseeyou_v2_state', JSON.stringify(state));
+      localStorage.setItem('eyeseeyou_v2_vitals', JSON.stringify(vitalsEnabled));
+      localStorage.setItem('eyeseeyou_v2_conv', JSON.stringify(convergenceEnabled));
       const btn = document.getElementById('make-default-btn');
       btn.textContent = 'SAVED!';
       setTimeout(() => { btn.textContent = 'Save as Default'; }, 1500);
     });
     document.getElementById('reset-default-btn').addEventListener('click', () => {
       localStorage.removeItem('eyeseeyou_defaults');
+      localStorage.removeItem('eyeseeyou_v2_state');
+      localStorage.removeItem('eyeseeyou_v2_vitals');
+      localStorage.removeItem('eyeseeyou_v2_conv');
       location.reload();
     });
 
@@ -2639,17 +2683,20 @@ async function main() {
   const gui = new GUI({ title: 'V2 · Behavior', width: 260 });
   gui.domElement.style.top = '60px';
   const gState = gui.addFolder('🧠 State (future Gemma)');
-  gState.add(state, 'curiosity', 0, 1, 0.01);
-  gState.add(state, 'fatigue', 0, 1, 0.01);
-  gState.add(state, 'tension', 0, 1, 0.01);
-  gState.add(state, 'alertness', 0, 1, 0.01);
-  const gVitals = gui.addFolder('❤️ Vitals');
-  gVitals.add(vitalsEnabled, 'drift');
-  gVitals.add(vitalsEnabled, 'microsaccades');
-  gVitals.add(vitalsEnabled, 'tremor');
-  gVitals.add(vitalsEnabled, 'blinks');
+  const onStateChange = () => controller.resetVitalsSchedule();
+  gState.add(state, 'curiosity', 0, 1, 0.01).onChange(onStateChange);
+  gState.add(state, 'fatigue', 0, 1, 0.01).onChange(onStateChange);
+  gState.add(state, 'tension', 0, 1, 0.01).onChange(onStateChange);
+  gState.add(state, 'alertness', 0, 1, 0.01).onChange(onStateChange);
+  const gVitals = gui.addFolder('❤️ Vitals (slow wandering drift · microsaccades jumps · tremor jitter · involuntary blinks)');
+  gVitals.add(vitalsEnabled, 'drift').name('drift (slow wander)');
+  gVitals.add(vitalsEnabled, 'microsaccades').name('microsaccades (jumps)');
+  gVitals.add(vitalsEnabled, 'tremor').name('tremor (jitter)');
+  gVitals.add(vitalsEnabled, 'blinks').name('blinks (involuntary)');
   const gConv = gui.addFolder('🎯 Convergence 3D');
-  gConv.add(convergenceEnabled, 'enabled').name('enabled (A/B)');
+  gConv.add(convergenceEnabled, 'enabled').name('3D convergence');
+  gConv.add(convergenceEnabled, 'flipHorizontal').name('flip horizontal (A/B)');
+  gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus (depth)');
 
   // Start tracking
   setLoadingStatus('Initializing tracking...');
@@ -2682,6 +2729,13 @@ async function main() {
     const upperAng = topOpenness * 0.7 + p.lidUpperTilt;
     const lowerAng = botOpenness * 0.7 + p.lidLowerTilt;
     renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, cyclops);
+
+    // V2.1: Pupil accommodation ("mise au point") — brief constriction on saccade + depth-based offset
+    if (convergenceEnabled.pupilFocus) {
+      const pupilOffset = controller.getPupilFocusOffset();
+      const basePupil = p.pupilSize;
+      renderer.setMorphTarget('pupilSize', Math.max(0.02, Math.min(1.0, basePupil + pupilOffset)));
+    }
 
     renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, cyclops);
     renderer.updateLighting(p.lightAngle, p.lightHeight, p.lightIntensity);
