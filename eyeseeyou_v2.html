@@ -1536,31 +1536,68 @@ class EyeRenderer {
     }
   }
 
-  setGaze(gx, gy, vergence, globeRotate, cyclops) {
+  setGaze(gx, gy, vergence, globeRotate, cyclops, faceZ = 0.5, convergenceOn = true) {
     const maxRot = Math.PI / 5;
     const gr = globeRotate;
-    // Listing's law: torsion = -horizontal * vertical * k
-    // Natural counter-rotation when looking diagonally
-    const listingK = 0.12;
-    if (this.left) {
-      const h = gx * maxRot * gr + (cyclops ? 0 : vergence);
-      const v = -gy * maxRot * gr;
-      this.left.pivot.rotation.y = h;
-      this.left.pivot.rotation.x = v;
-      this.left.pivot.rotation.z = -h * v * listingK;
-    }
-    if (this.right && !cyclops) {
-      const h = gx * maxRot * gr - vergence;
-      const v = -gy * maxRot * gr;
-      this.right.pivot.rotation.y = h;
-      this.right.pivot.rotation.x = v;
-      this.right.pivot.rotation.z = -h * v * listingK;
+    const listingK = 0.12;  // Listing's law torsion coefficient
+
+    if (convergenceOn) {
+      // V2: True 3D convergence — each eye points at the viewer's 3D position.
+      // Emergent vergence: close viewer → strong convergence; far → near-parallel.
+      //
+      // gx/gy are in the canonical normalized frame [-1..1] (from controller.getGaze()).
+      // faceZ ∈ [0..1] where 0=far, 1=near.
+      // Build a target world position, then compute per-eye yaw/pitch from that eye's world pos.
+      const faceDist = lerp(1.5, 0.4, faceZ);             // world Z distance to viewer
+      const trackingScaleX = 0.8;                          // how far lateral sweep is
+      const trackingScaleY = 0.6;
+      const faceWorld = new THREE.Vector3(
+        gx * faceDist * trackingScaleX,
+        -gy * faceDist * trackingScaleY,
+        faceDist
+      );
+      const _scratch = new THREE.Vector3();
+      const _dir = new THREE.Vector3();
+      const eyes = cyclops ? [this.left] : [this.left, this.right];
+      for (const eye of eyes) {
+        if (!eye) continue;
+        // Need world position of the eye pivot (parent = group with offset)
+        if (eye.pivot.parent) eye.pivot.parent.updateWorldMatrix(true, false);
+        eye.pivot.getWorldPosition(_scratch);
+        _dir.copy(faceWorld).sub(_scratch).normalize();
+        // Convert forward +Z to yaw/pitch. Local frame of pivot (parent group is axis-aligned).
+        // Transform direction into parent's local frame to respect group rotations.
+        const parentQuat = new THREE.Quaternion();
+        if (eye.pivot.parent) eye.pivot.parent.getWorldQuaternion(parentQuat);
+        _dir.applyQuaternion(parentQuat.invert());
+        const yaw = Math.atan2(_dir.x, _dir.z);
+        const pitch = Math.asin(THREE.MathUtils.clamp(-_dir.y, -1, 1));
+        eye.pivot.rotation.y = THREE.MathUtils.clamp(yaw, -maxRot * 1.2, maxRot * 1.2);
+        eye.pivot.rotation.x = THREE.MathUtils.clamp(pitch, -maxRot * 1.2, maxRot * 1.2);
+        eye.pivot.rotation.z = -eye.pivot.rotation.y * eye.pivot.rotation.x * listingK;
+      }
+    } else {
+      // V1 fallback — parallel rotation with additive vergence (A/B comparison)
+      if (this.left) {
+        const h = gx * maxRot * gr + (cyclops ? 0 : vergence);
+        const v = -gy * maxRot * gr;
+        this.left.pivot.rotation.y = h;
+        this.left.pivot.rotation.x = v;
+        this.left.pivot.rotation.z = -h * v * listingK;
+      }
+      if (this.right && !cyclops) {
+        const h = gx * maxRot * gr - vergence;
+        const v = -gy * maxRot * gr;
+        this.right.pivot.rotation.y = h;
+        this.right.pivot.rotation.x = v;
+        this.right.pivot.rotation.z = -h * v * listingK;
+      }
     }
     // Iris parallax: offset iris meshes opposite to gaze for depth illusion
     const pd = this._irisParallaxDepth || 0;
     if (pd !== 0) {
       for (const m of this.irisMeshes) {
-        const eye = m.parent;  // pivot or model group
+        const eye = m.parent;
         const rotY = eye?.parent?.rotation?.y || 0;
         const rotX = eye?.parent?.rotation?.x || 0;
         m.position.x = -Math.sin(rotY) * pd;
@@ -2480,7 +2517,7 @@ async function main() {
     controller.update(dt);
 
     const gaze = controller.getGaze();
-    renderer.setGaze(gaze.x, gaze.y, gaze.vergence, p.globeRotate, cyclops);
+    renderer.setGaze(gaze.x, gaze.y, gaze.vergence, p.globeRotate, cyclops, controller.face.z, convergenceEnabled.enabled);
 
     const ba = controller.getBlinkAmount();
     const effOpen = p.lidOpen * (1.0 - ba);
