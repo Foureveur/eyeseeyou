@@ -59,6 +59,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
 <div id="panel-toggle" class="ui-layer">&#9881;</div>
 <div id="immerse-btn" class="ui-layer">Immerse</div>
 <div id="debug-hud" class="ui-layer" style="position:fixed;bottom:14px;right:14px;z-index:250;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:10px;line-height:1.6;color:rgba(255,255,255,0.85);letter-spacing:0.5px;display:none;pointer-events:none;"></div>
+<canvas id="webcam-overlay" class="ui-layer" style="position:fixed;bottom:16px;left:16px;width:180px;z-index:101;pointer-events:none;display:none;"></canvas>
 
 <div id="panel" class="ui-layer">
   <h3>Iris</h3>
@@ -229,12 +230,26 @@ const convergenceEnabled = {
   showDebugHud: false,    // Live overlay showing yaw/pitch of each eye + pupil offset — verify the effect empirically.
 };
 
-// Restore v2-specific saved prefs (state + vitals + convergence)
+// V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
+const blinkConfig = {
+  intervalMean: 4.0,         // seconds — average time between blinks
+  intervalJitter: 0.6,       // 0..1, how random the interval is (0 = metronome, 1 = very random)
+  doubleProbability: 0.15,   // 0..1, chance of a double blink
+  speedMin: 6,               // blink speed multiplier min (lower = slower blink)
+  speedMax: 9,               // max
+};
+
+// Restore v2-specific saved prefs (state + vitals + convergence + blink)
 try {
   const s = localStorage.getItem('eyeseeyou_v2_state');      if (s) Object.assign(state, JSON.parse(s));
   const v = localStorage.getItem('eyeseeyou_v2_vitals');     if (v) Object.assign(vitalsEnabled, JSON.parse(v));
   const c = localStorage.getItem('eyeseeyou_v2_conv');       if (c) Object.assign(convergenceEnabled, JSON.parse(c));
+  const b = localStorage.getItem('eyeseeyou_v2_blink');      if (b) Object.assign(blinkConfig, JSON.parse(b));
 } catch (e) {}
+// V2.3: force convergence ON at reload regardless of stale saved prefs
+// (was confusingly off in user's tests — default is ON)
+convergenceEnabled.enabled = true;
+convergenceEnabled.pupilFocus = true;
 
 // Shared small utils
 const lerp = (a, b, t) => a + (b - a) * t;
@@ -573,6 +588,18 @@ const EMOTIONS = {
   sadness:  { lidOpen: 0.58, lidUpperTilt: -0.12, lidLowerTilt: -0.04, lidSlant: 0.12, pupilSize: 0.22, lidLowerRatio: 0.18, lidWidth: 0.98 },
   surprise: { lidOpen: 1.35, lidUpperTilt: 0.1,   lidLowerTilt: -0.14, lidSlant: 0,    pupilSize: 0.12, lidLowerRatio: 0.08, lidWidth: 1.18 },
   contempt: { lidOpen: 0.68, lidUpperTilt: -0.06, lidLowerTilt: 0.06,  lidSlant: -0.2, pupilSize: 0.18, lidLowerRatio: 0.28, lidWidth: 0.98 },
+};
+
+// V2.3: emotion → behavioral state mapping (unifies emoji emotions with state sliders)
+// Clicking an emoji now ALSO updates curiosity/fatigue/tension/alertness behavior.
+const EMOTION_STATE = {
+  neutral:  { curiosity: 0.5,  fatigue: 0.2,  tension: 0.3,  alertness: 0.7 },
+  joy:      { curiosity: 0.75, fatigue: 0.1,  tension: 0.2,  alertness: 0.85 },
+  anger:    { curiosity: 0.35, fatigue: 0.15, tension: 0.9,  alertness: 0.8 },
+  fear:     { curiosity: 0.7,  fatigue: 0.15, tension: 0.95, alertness: 1.0 },
+  sadness:  { curiosity: 0.2,  fatigue: 0.85, tension: 0.3,  alertness: 0.25 },
+  surprise: { curiosity: 1.0,  fatigue: 0.0,  tension: 0.7,  alertness: 1.0 },
+  contempt: { curiosity: 0.25, fatigue: 0.4,  tension: 0.55, alertness: 0.5 },
 };
 
 
@@ -1645,7 +1672,15 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
         this.right.pivot.rotation.x = v;
         this.right.pivot.rotation.z = -h * v * listingK;
       }
+      // V2.3: also update _lastYaw in fallback so HUD isn't stale
+      this._lastYaw = {
+        left: this.left?.pivot.rotation.y ?? 0,
+        right: this.right?.pivot.rotation.y ?? 0,
+        pitch: this.left?.pivot.rotation.x ?? 0,
+        mode: 'parallel',
+      };
     }
+    if (convergenceOn && this._lastYaw) this._lastYaw.mode = 'per-eye';
     // Iris parallax: offset iris meshes opposite to gaze for depth illusion
     const pd = this._irisParallaxDepth || 0;
     if (pd !== 0) {
@@ -1965,17 +2000,47 @@ class EyeController {
 
   setEmotion(name) {
     const e = EMOTIONS[name];
-    if (e) this._emoTargets = { ...e };
+    if (!e) return;
+    // V2.3: emotions COMPOSE with user-modified params instead of overwriting.
+    // For each emotion-controlled param, apply the emotion's DELTA relative to neutral,
+    // starting from whatever the user last set. So user-lowered lidOpen + angry preset
+    // = user's lidOpen × angry's reduction (proportional), not just angry's raw value.
+    const neutral = EMOTIONS.neutral;
+    const overrides = this._userOverrides || {};
+    for (const key of Object.keys(e)) {
+      const neutralVal = neutral[key];
+      const emoDelta = e[key] - neutralVal;
+      // Base = user's current manual override (if any) else neutral
+      const base = (key in overrides) ? overrides[key] : neutralVal;
+      this._emoTargets[key] = base + emoDelta;
+    }
+    // V2.3: UNIFY emotion + state — emoji click also updates behavioral state
+    const s = EMOTION_STATE[name];
+    if (s) {
+      Object.assign(state, s);
+      this.resetVitalsSchedule();
+      // Notify lil-gui sliders to refresh their display
+      if (this._onStateUpdate) this._onStateUpdate();
+    }
+  }
+
+  // V2.3: called from UI slider — tracks params the user has manually modified
+  // so subsequent emotion changes compose instead of overwriting.
+  recordUserOverride(key, value) {
+    if (!this._userOverrides) this._userOverrides = {};
+    this._userOverrides[key] = value;
+    // Re-apply current emotion (if any) to recompose immediately
+    if (this._currentEmotion) this.setEmotion(this._currentEmotion);
   }
 
   triggerBlink(allowDouble = true) {
     if (!this._blink.active) {
       this._blink.active = true;
       this._blink.progress = 0;
-      // Variable speed: 6-9 (faster = quicker blink, ~130-170ms total)
-      this._blink.speed = 6 + Math.random() * 3;
-      // ~15% chance of double blink (two quick blinks in succession)
-      this._blink.doubleQueued = allowDouble && Math.random() < 0.15;
+      // V2.3: variable speed controlled by blinkConfig
+      this._blink.speed = blinkConfig.speedMin + Math.random() * (blinkConfig.speedMax - blinkConfig.speedMin);
+      // V2.3: double-blink probability from config
+      this._blink.doubleQueued = allowDouble && Math.random() < blinkConfig.doubleProbability;
       this._blink.lastBlinkTime = this._micro.timer;
     }
   }
@@ -2039,9 +2104,12 @@ class EyeController {
       sm = p.smoothing;  // normal smooth pursuit
     }
 
-    g.currentX += (g.targetX - g.currentX) * sm;
-    g.currentY += (g.targetY - g.currentY) * sm;
-    g.currentZ += (g.targetZ - g.currentZ) * sm * 0.5;
+    // V2.3: alertness wired — high alertness = faster reaction (larger sm)
+    const alertMul = lerp(0.6, 2.0, state.alertness);
+    const effectiveSm = sm * alertMul;
+    g.currentX += (g.targetX - g.currentX) * effectiveSm;
+    g.currentY += (g.targetY - g.currentY) * effectiveSm;
+    g.currentZ += (g.targetZ - g.currentZ) * effectiveSm * 0.5;
     const tgtV = p.vergenceBase + Math.max(0, g.currentZ - 0.35) * p.vergenceMax;
     g.vergence += (tgtV - g.vergence) * sm * 0.7;
     this._updateBlink(dt);
@@ -2136,16 +2204,17 @@ class EyeController {
         m.saccadeElapsed = 0;
         this._triggerPupilConstriction();  // V2.1: mise au point — pupil constricts on saccade
         m.saccadeDur = 0.025 + Math.random() * 0.03;  // 25-55ms human microsaccade
-        // Tension boosts amplitude slightly
-        const ampBoost = lerp(1.0, 1.3, state.tension);
+        // V2.3: Tension AND curiosity boost amplitude — curious eyes look around more
+        const ampBoost = lerp(1.0, 1.3, state.tension) * lerp(1.0, 1.8, state.curiosity);
         const amp = (0.01 + Math.random() * 0.07) * ampBoost;
         const angle = Math.random() * Math.PI * 2;
         m.saccadeDX = Math.cos(angle) * amp;
         m.saccadeDY = Math.sin(angle) * amp;
         m.saccadeFromX = g.targetX;
         m.saccadeFromY = g.targetY;
-        // V2: tension shortens interval — high tension = twitchy gaze
-        const intervalScale = lerp(1.2, 0.4, state.tension);
+        // V2: tension + curiosity shorten interval — tense or curious = twitchy gaze
+        // V2.3: curiosity now wired (was unused) → more frequent saccades + bigger amplitude
+        const intervalScale = lerp(1.2, 0.4, state.tension) * lerp(1.3, 0.5, state.curiosity);
         m.nextSaccadeIn = (0.2 + Math.random() * Math.random() * 2.0) * intervalScale;
       }
       g.targetX = m.driftX;
@@ -2195,17 +2264,21 @@ class EyeController {
   }
 
   _scheduleBlink() {
-    // Human blink interval: ~3-7s average, log-normal distribution.
-    // V2: modulated by state.fatigue — tired eyes blink much more frequently.
-    // V2.1: timeout is cancellable so state changes can force reschedule.
+    // V2.3: fully parametric blink scheduling using blinkConfig + state.fatigue.
+    // - intervalMean: base time (s) between blinks
+    // - intervalJitter: 0..1 random spread around mean
+    // - fatigue shortens the interval (tired eyes blink more)
     if (this._blink.timer) clearTimeout(this._blink.timer);
-    const fatigueScale = lerp(1.0, 0.15, state.fatigue);   // fatigue=1 → ~6× more frequent (was 2.5×)
-    const base = (2500 + Math.random() * 3500) * fatigueScale;
-    const jitter = Math.random() < 0.15 ? Math.random() * 4000 * fatigueScale : 0;
+    const fatigueScale = lerp(1.0, 0.2, state.fatigue);  // fatigue=1 → 5× more frequent
+    const meanSec = blinkConfig.intervalMean * fatigueScale;
+    // Random factor: 1-jitter .. 1+jitter (wider jitter = more stochastic)
+    const jit = blinkConfig.intervalJitter;
+    const randMul = 1 + (Math.random() * 2 - 1) * jit;
+    const delayMs = Math.max(300, meanSec * 1000 * randMul);
     this._blink.timer = setTimeout(() => {
       if (vitalsEnabled.blinks) this.triggerBlink();
       this._scheduleBlink();
-    }, base + jitter);
+    }, delayMs);
   }
 
   // V2.1: force reschedule when state changes (used by lil-gui onChange)
@@ -2278,9 +2351,12 @@ class FaceTracker {
         this.controller.face.z = Math.min(1.0, ed * 4.0);
         this.controller.face.detected = true;
         this.controller.face.lastTime = now;
+        // V2.3: expose prediction data for overlay rendering
+        this.controller.face.prediction = f;
         setStatus('active', 'Tracking');
       } else if (this.controller.face.detected && now - this.controller.face.lastTime > 500) {
         this.controller.face.detected = false;
+        this.controller.face.prediction = null;
         setStatus('inactive', 'No face');
       }
     }).catch(() => {});
@@ -2328,6 +2404,7 @@ class DebugUI {
       btn.addEventListener('click', () => {
         document.querySelectorAll('.emo-btn').forEach(b => b.classList.remove('active'));
         btn.classList.add('active');
+        this.ctrl._currentEmotion = btn.dataset.emo;
         this.ctrl.setEmotion(btn.dataset.emo);
       });
     });
@@ -2535,6 +2612,11 @@ class DebugUI {
   _apply(id, val) {
     const key = id.replace('p-', '');
     this.ctrl.setParam(key, val);
+    // V2.3: if this is an emotion-controlled param, remember the user override
+    // so subsequent emotion clicks compose (e.g., user-lowered lidOpen + angry emoji
+    // = angry with the user's lidOpen adjustment preserved).
+    const EMO_KEYS = ['lidOpen', 'lidUpperTilt', 'lidLowerTilt', 'lidSlant', 'pupilSize', 'lidLowerRatio', 'lidWidth'];
+    if (EMO_KEYS.includes(key)) this.ctrl.recordUserOverride(key, val);
     const r = this.rend;
     switch (key) {
       case 'irisColorTint': r.setIrisTint(val); break;
@@ -2717,21 +2799,43 @@ async function main() {
   gui.domElement.classList.add('ui-layer');   // fade out in immersed mode
   const gState = gui.addFolder('State');
   const onStateChange = () => controller.resetVitalsSchedule();
-  gState.add(state, 'curiosity', 0, 1, 0.01).onChange(onStateChange);
-  gState.add(state, 'fatigue', 0, 1, 0.01).onChange(onStateChange);
-  gState.add(state, 'tension', 0, 1, 0.01).onChange(onStateChange);
-  gState.add(state, 'alertness', 0, 1, 0.01).onChange(onStateChange);
+  const stateCtrls = [
+    gState.add(state, 'curiosity', 0, 1, 0.01).onChange(onStateChange),
+    gState.add(state, 'fatigue', 0, 1, 0.01).onChange(onStateChange),
+    gState.add(state, 'tension', 0, 1, 0.01).onChange(onStateChange),
+    gState.add(state, 'alertness', 0, 1, 0.01).onChange(onStateChange),
+  ];
+  // V2.3: when an emoji sets state, the slider values need to refresh in the UI
+  controller._onStateUpdate = () => stateCtrls.forEach(c => c.updateDisplay());
   const gVitals = gui.addFolder('Vitals');
   gVitals.add(vitalsEnabled, 'drift').name('drift');
   gVitals.add(vitalsEnabled, 'microsaccades').name('microsaccades');
   gVitals.add(vitalsEnabled, 'tremor').name('tremor');
   gVitals.add(vitalsEnabled, 'blinks').name('blinks');
   gVitals.close();  // start collapsed
+
+  // V2.3: fine blink controls
+  const gBlink = gui.addFolder('Blink');
+  gBlink.add(blinkConfig, 'intervalMean', 0.5, 15, 0.1).name('interval mean (s)').onChange(() => controller.resetVitalsSchedule());
+  gBlink.add(blinkConfig, 'intervalJitter', 0, 1, 0.01).name('jitter (stochasticity)');
+  gBlink.add(blinkConfig, 'doubleProbability', 0, 1, 0.01).name('double-blink prob');
+  gBlink.add(blinkConfig, 'speedMin', 3, 12, 0.5).name('speed min (slow)');
+  gBlink.add(blinkConfig, 'speedMax', 3, 15, 0.5).name('speed max (fast)');
+  gBlink.close();
   const gConv = gui.addFolder('Per-eye tracking');
   gConv.add(convergenceEnabled, 'enabled').name('per-eye tracking ON/OFF');
   gConv.add(convergenceEnabled, 'pupilFocus').name('pupil focus (accommodation)');
   gConv.add(convergenceEnabled, 'showDebugHud').name('DEBUG HUD (show angles)');
   gConv.close();
+
+  // V2.3: live webcam + tracking overlay — see what the machine sees
+  const tracking = { showWebcam: false };
+  const gTrack = gui.addFolder('Camera feed');
+  gTrack.add(tracking, 'showWebcam').name('show webcam + face bbox').onChange(v => {
+    document.getElementById('webcam-debug').style.display = v ? 'block' : 'none';
+    document.getElementById('webcam-overlay').style.display = v ? 'block' : 'none';
+  });
+  gTrack.close();
 
   // Start tracking
   setLoadingStatus('Initializing tracking...');
@@ -2772,14 +2876,54 @@ async function main() {
       renderer.setMorphTarget('pupilSize', Math.max(0.02, Math.min(1.0, basePupil + pupilOffset)));
     }
 
+    // V2.3: webcam tracking overlay — draw bbox + eye landmarks on top of the webcam feed
+    if (tracking.showWebcam) {
+      const video = document.getElementById('webcam-debug');
+      const overlay = document.getElementById('webcam-overlay');
+      if (video.videoWidth > 0) {
+        overlay.width = video.videoWidth;
+        overlay.height = video.videoHeight;
+        const ctx = overlay.getContext('2d');
+        ctx.clearRect(0, 0, overlay.width, overlay.height);
+        const pred = controller.face.prediction;
+        if (pred) {
+          const [x1, y1] = pred.topLeft;
+          const [x2, y2] = pred.bottomRight;
+          ctx.strokeStyle = '#4f4';
+          ctx.lineWidth = 3;
+          ctx.strokeRect(x1, y1, x2 - x1, y2 - y1);
+          // Eye landmarks (index 0 = right eye, 1 = left from BlazeFace)
+          if (pred.landmarks) {
+            ctx.fillStyle = '#ff0';
+            for (let i = 0; i < Math.min(6, pred.landmarks.length); i++) {
+              const [lx, ly] = pred.landmarks[i];
+              ctx.beginPath();
+              ctx.arc(lx, ly, 4, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          }
+          // Crosshair at face center
+          const cx = (x1 + x2) / 2, cy = (y1 + y2) / 2;
+          ctx.strokeStyle = 'rgba(255,255,255,0.5)';
+          ctx.lineWidth = 1;
+          ctx.beginPath();
+          ctx.moveTo(cx - 10, cy); ctx.lineTo(cx + 10, cy);
+          ctx.moveTo(cx, cy - 10); ctx.lineTo(cx, cy + 10);
+          ctx.stroke();
+        }
+      }
+    }
+
     // V2.2: Debug HUD — live yaw/pitch/pupil values so user can verify the per-eye tracking
     const hud = document.getElementById('debug-hud');
     if (convergenceEnabled.showDebugHud) {
       hud.style.display = 'block';
-      const y = renderer._lastYaw || { left: 0, right: 0, pitch: 0 };
+      const y = renderer._lastYaw || { left: 0, right: 0, pitch: 0, mode: '?' };
       const toDeg = r => (r * 180 / Math.PI).toFixed(1);
       const pupilOff = controller.getPupilFocusOffset();
-      hud.textContent = `face.x=${controller.face.x.toFixed(2)}  face.z=${controller.face.z.toFixed(2)}
+      const modeLabel = y.mode === 'per-eye' ? '🎯 per-eye' : y.mode === 'parallel' ? '⎓ parallel (OFF)' : '?';
+      hud.textContent = `mode: ${modeLabel}
+face.x=${controller.face.x.toFixed(2)}  face.z=${controller.face.z.toFixed(2)}
 L-eye yaw:  ${toDeg(y.left)}°
 R-eye yaw:  ${toDeg(y.right)}°
 Δ (diff):   ${toDeg(y.left - y.right)}°
