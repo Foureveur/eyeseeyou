@@ -1685,7 +1685,8 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       const eyes = cyclops ? [this.left] : [this.left, this.right];
       for (const eye of eyes) {
         if (!eye) continue;
-        if (eye.pivot.parent) eye.pivot.parent.updateWorldMatrix(true, false);
+        // V2.6: Three.js auto-updates matrices at render time; the pivot world position
+        // is stable frame-to-frame. Remove redundant updateWorldMatrix (perf win).
         eye.pivot.getWorldPosition(_scratch);
         _dir.copy(faceWorld).sub(_scratch).normalize();
         // Yaw/pitch in WORLD frame (valid because eye.pivot.parent has identity rotation by default)
