@@ -236,11 +236,11 @@ const cameraDisplay = {
   mirror: true,           // CSS flip of the webcam video + overlay — natural selfie view
 };
 
-// V2.5: per-eye tracking tunables (ad-hoc proportions of the oversized eye rig)
+// V2.5+V2.7: per-eye tracking tunables (ad-hoc proportions of the oversized eye rig)
 const convergenceConfig = {
   targetDistance: 5.0,    // base distance to the gaze target (~ camera.position.z = 5)
   lateralScale: 4.0,      // how far the target can shift laterally (world units)
-  verticalScale: 2.5,     // vertical shift
+  verticalScale: 4.0,     // vertical shift — boosted for visibility (was 2.5, too subtle)
 };
 
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
@@ -1677,9 +1677,11 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       const faceDist = lerp(camZ * 1.6, camZ * 0.5, faceZ);
       const trackingScaleX = convergenceConfig.lateralScale;
       const trackingScaleY = convergenceConfig.verticalScale;
+      // V2.7: face.y is already positive when user looks UP (see FaceTracker.loop).
+      // Don't flip — user UP → target above → eye rotates UP. Previous code inverted this.
       const faceWorld = new THREE.Vector3(
         gx * trackingScaleX,
-        -gy * trackingScaleY,
+        gy * trackingScaleY,
         faceDist
       );
       // Debug: move the target marker
