@@ -1046,11 +1046,6 @@ class EyeRenderer {
         console.log(`[SCLERA] UV count=${child.geometry.getAttribute('uv').count}`);
         const sclMat = new THREE.MeshBasicMaterial({
           map: scleraColorTex,
-          // V2.11: enable real opacity control. Without `transparent: true`,
-          // setting material.opacity has no effect — the sclera was always fully drawn.
-          transparent: true,
-          opacity: 1.0,
-          depthWrite: true,
           stencilWrite: true,
           stencilFunc: THREE.NotEqualStencilFunc,
           stencilRef: 2,
@@ -1140,10 +1135,6 @@ class EyeRenderer {
           child.geometry.setAttribute('uv', this._scleraUv.clone());
           const sclMat = new THREE.MeshBasicMaterial({
             map: scleraColorTex,
-            // V2.11: enable real opacity control (was ignored without transparent flag)
-            transparent: true,
-            opacity: 1.0,
-            depthWrite: true,
             stencilWrite: true,
             stencilFunc: THREE.NotEqualStencilFunc,
             stencilRef: 2, stencilFuncMask: 0xff,
@@ -1356,12 +1347,12 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
 
       // Inner conjunctival surface
       // V2.5: on the LOWER lid, the inner mesh is the visible surface (outer is back-face-culled).
-      // V2.11: ALSO use skinMat for upper inner — the pink innerLidMat (0xd4857a) was
-      // visible through the transparent cornea on the sides, reading as "red eye".
-      // Both inner meshes now use skin material (BackSide so the back-facing side shows).
+      // Use a clone of skinMat (same materiality as upper lid's outer) so the lower lid reads
+      // as actual skin, not pink conjunctiva. Only UPPER lid keeps the true innerLidMat
+      // (where it's barely visible — shows at bottom edge when lid is partially open).
       const innerGeo = createAlmondLidGeometry(lidR * 0.985, segsU, segsV, isUpper, lidParams);
-      const iMat = skinMat.clone();
-      iMat.side = THREE.BackSide;
+      const iMat = isUpper ? innerLidMat.clone() : skinMat.clone();
+      if (!isUpper) iMat.side = THREE.BackSide;   // keep BackSide so it shows the right facing
       const innerMesh = new THREE.Mesh(innerGeo, iMat);
       innerMesh.name = 'inner';
       innerMesh.renderOrder = 3;
