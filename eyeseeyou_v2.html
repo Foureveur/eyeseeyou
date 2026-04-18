@@ -227,7 +227,16 @@ const convergenceEnabled = {
                           // When on, near eye rotates less, far eye rotates more — real parallax.
                           // When off, both eyes rotate in parallel (V1 behavior, for A/B comparison).
   pupilFocus: true,       // Pupil accommodation: constricts after saccades (~280ms) + slight dilation on proximity.
-  showDebugHud: false,    // Live overlay showing yaw/pitch of each eye + pupil offset — verify the effect empirically.
+  showDebugHud: false,    // Live overlay showing yaw/pitch of each eye + pupil offset.
+  showTargetMarker: false,// Render a small red sphere at the gaze target — visualize where eyes aim.
+  mirrorFaceX: false,     // Flip face.x sign. Depends on webcam mirror convention of user's browser.
+};
+
+// V2.5: per-eye tracking tunables (ad-hoc proportions of the oversized eye rig)
+const convergenceConfig = {
+  targetDistance: 5.0,    // base distance to the gaze target (~ camera.position.z = 5)
+  lateralScale: 4.0,      // how far the target can shift laterally (world units)
+  verticalScale: 2.5,     // vertical shift
 };
 
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
@@ -246,12 +255,16 @@ const pupilFocusConfig = {
   responseSpeed: 12,          // spring-like speed of offset transition
 };
 
-// V2.4: heartbeat pulse — subtle pupil dilation timed to a cardiac rhythm.
+// V2.4+V2.5: heartbeat pulse — subtle pupil dilation timed to a cardiac rhythm.
 // Coupled with state.tension (stressed = faster BPM).
 const heartbeat = {
   enabled: false,
   bpm: 72,                    // baseline BPM (tension modulates: 60..120)
+  frequency: 1.0,             // 0..1: probability a given beat fires. 1 = continuous, <1 = sparser
+  irregularity: 0.0,          // 0..1: random timing jitter (0 = metronome, 1 = chaotic)
   pulseStrength: 0.05,        // pupil dilation amplitude per beat
+  doublePulse: true,          // "lub-dub" — each beat has S1 + S2 (authentic cardiac)
+  s2Strength: 0.6,            // S2 amplitude relative to S1 (0..1)
   tensionCouple: true,        // true = tension drives BPM
 };
 
@@ -647,6 +660,14 @@ class EyeRenderer {
     this.clock = new THREE.Clock();
     this.eyeGroup = new THREE.Group();
     this.scene.add(this.eyeGroup);
+    // V2.5: debug target marker — small red sphere showing where the eyes are aiming
+    this._targetMarker = new THREE.Mesh(
+      new THREE.SphereGeometry(0.08, 12, 8),
+      new THREE.MeshBasicMaterial({ color: 0xff3333, depthTest: false, toneMapped: false })
+    );
+    this._targetMarker.visible = false;
+    this._targetMarker.renderOrder = 999;
+    this.scene.add(this._targetMarker);
     this.left = null;
     this.right = null;
     this.irisMaterials = [];
@@ -1296,8 +1317,13 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
       else this._lidSkinLowerMats.push(outerMat);
 
       // Inner conjunctival surface
+      // V2.5: on the LOWER lid, the inner mesh is the visible surface (outer is back-face-culled).
+      // Use a clone of skinMat (same materiality as upper lid's outer) so the lower lid reads
+      // as actual skin, not pink conjunctiva. Only UPPER lid keeps the true innerLidMat
+      // (where it's barely visible — shows at bottom edge when lid is partially open).
       const innerGeo = createAlmondLidGeometry(lidR * 0.985, segsU, segsV, isUpper, lidParams);
-      const iMat = innerLidMat.clone();
+      const iMat = isUpper ? innerLidMat.clone() : skinMat.clone();
+      if (!isUpper) iMat.side = THREE.BackSide;   // keep BackSide so it shows the right facing
       const innerMesh = new THREE.Mesh(innerGeo, iMat);
       innerMesh.name = 'inner';
       innerMesh.renderOrder = 3;
@@ -1630,46 +1656,45 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
     const listingK = 0.12;  // Listing's law torsion coefficient
 
     if (convergenceOn) {
-      // V2: Per-eye viewer tracking — each eye independently points at the viewer's 3D position.
-      // Consequence: the eye CLOSER to the viewer's lateral position rotates LESS,
-      // the FAR eye rotates MORE. This is the real parallax that V1 lacked.
+      // V2.5: Per-eye viewer tracking — rebuilt around the ACTUAL scene camera.
+      // The camera is at z=5; the eyes rig is at origin. For eyes to "look at the viewer"
+      // (who is in front of the camera), the gaze target must be near the camera position,
+      // not far beyond it. Previous versions placed target at z=14-25 which made eyes
+      // appear to stare past the user into the distance (mild convergence that read as "blank").
       //
-      // V2.4: fix scale — the rig uses WORLD units where eyes are spaced ~1.8 apart.
-      // Previously faceDist ≈ 0.75 caused extreme cross-eye (vergence angle ~50° even
-      // when centered). Real humans at arm's length have ~3–5° vergence. Moving the
-      // viewer to physically plausible distances (far=25 units, near=4) gives
-      // natural-looking angles that still shift per-eye differentially.
-      const faceDist = lerp(25, 4, faceZ);       // far=25, near=4 world units
-      const trackingScaleX = 12.0;                // lateral sweep scaled to match faceDist
-      const trackingScaleY = 8.0;
+      // Target: near the camera plane, shifted by gx/gy. This makes centered viewer → eyes
+      // truly converge on camera (natural vergence ~10°). Per-eye differential emerges
+      // automatically from the triangle math.
+      //
+      // Simplified math: parent groups are axis-aligned (positions only, no rotation on
+      // the pivot's parent by default). World frame == local frame for yaw/pitch, no need
+      // for parent-quaternion transform.
+      const camZ = convergenceConfig.targetDistance;   // tunable via lil-gui
+      const faceDist = lerp(camZ * 1.6, camZ * 0.5, faceZ);
+      const trackingScaleX = convergenceConfig.lateralScale;
+      const trackingScaleY = convergenceConfig.verticalScale;
       const faceWorld = new THREE.Vector3(
-        gx * trackingScaleX,                     // lateral offset from center (not scaled by dist — gx already normalized)
+        gx * trackingScaleX,
         -gy * trackingScaleY,
         faceDist
       );
+      // Debug: move the target marker
+      if (this._targetMarker) this._targetMarker.position.copy(faceWorld);
       const _scratch = new THREE.Vector3();
       const _dir = new THREE.Vector3();
       const eyes = cyclops ? [this.left] : [this.left, this.right];
       for (const eye of eyes) {
         if (!eye) continue;
-        // Need world position of the eye pivot (parent = group with offset)
         if (eye.pivot.parent) eye.pivot.parent.updateWorldMatrix(true, false);
         eye.pivot.getWorldPosition(_scratch);
         _dir.copy(faceWorld).sub(_scratch).normalize();
-        // Convert forward +Z to yaw/pitch. Local frame of pivot (parent group is axis-aligned).
-        // Transform direction into parent's local frame to respect group rotations.
-        const parentQuat = new THREE.Quaternion();
-        if (eye.pivot.parent) eye.pivot.parent.getWorldQuaternion(parentQuat);
-        _dir.applyQuaternion(parentQuat.invert());
+        // Yaw/pitch in WORLD frame (valid because eye.pivot.parent has identity rotation by default)
         const yaw = Math.atan2(_dir.x, _dir.z);
         const pitch = Math.asin(THREE.MathUtils.clamp(-_dir.y, -1, 1));
-        // V2.2: wider clamp so the per-eye differential isn't squashed by limits.
-        // Humans can rotate eyes ~50° horizontally; maxRot = PI/5 = 36°, * 1.5 = 54° is realistic.
         eye.pivot.rotation.y = THREE.MathUtils.clamp(yaw, -maxRot * 1.5, maxRot * 1.5);
         eye.pivot.rotation.x = THREE.MathUtils.clamp(pitch, -maxRot * 1.5, maxRot * 1.5);
         eye.pivot.rotation.z = -eye.pivot.rotation.y * eye.pivot.rotation.x * listingK;
       }
-      // Stash raw angles for debug HUD
       this._lastYaw = {
         left: this.left?.pivot.rotation.y ?? 0,
         right: this.right?.pivot.rotation.y ?? 0,
@@ -2150,17 +2175,41 @@ class EyeController {
       : 0;
     // (b) depth accommodation — scaled by pupilFocusConfig.depthAccommodationRange
     const depthOffset = (this.face.z - 0.5) * pupilFocusConfig.depthAccommodationRange * 2;
-    // (c) heartbeat pulse — sine at BPM frequency
+    // (c) heartbeat pulse — authentic lub-dub cardiac pattern, BPM + frequency + irregularity
     let pulse = 0;
     if (heartbeat.enabled) {
       const effectiveBpm = heartbeat.tensionCouple
         ? lerp(heartbeat.bpm, heartbeat.bpm * 1.7, state.tension)
         : heartbeat.bpm;
       pf.heartPhase = (pf.heartPhase || 0) + dt * (effectiveBpm / 60);
-      // Asymmetric pulse: quick systole (narrow peak) then diastole (longer valley)
-      const phase = pf.heartPhase % 1;
-      const systole = phase < 0.12 ? Math.sin(phase / 0.12 * Math.PI) : 0;
-      pulse = systole * heartbeat.pulseStrength;
+      // On each wrap, decide whether this beat fires and optionally jitter next beat
+      if (!pf._lastBeatIdx) pf._lastBeatIdx = 0;
+      if (!pf._skipCurrent) pf._skipCurrent = false;
+      const currentBeatIdx = Math.floor(pf.heartPhase);
+      if (currentBeatIdx !== pf._lastBeatIdx) {
+        pf._lastBeatIdx = currentBeatIdx;
+        // Frequency: probability this beat fires (1.0 = always, 0.3 = sparse)
+        pf._skipCurrent = Math.random() >= heartbeat.frequency;
+        // Irregularity: jitter heartPhase so next beat comes early or late
+        if (heartbeat.irregularity > 0) {
+          const jitter = (Math.random() * 2 - 1) * heartbeat.irregularity * 0.35;
+          pf.heartPhase += jitter;
+        }
+      }
+      if (!pf._skipCurrent) {
+        const phase = pf.heartPhase % 1;
+        // S1 (lub): quick systole early in the cycle
+        const s1 = phase < 0.10 ? Math.sin(phase / 0.10 * Math.PI) : 0;
+        // S2 (dub): second beat, smaller, ~0.3-0.4 of the way through (authentic cardiac interval)
+        let s2 = 0;
+        if (heartbeat.doublePulse) {
+          const s2Start = 0.28, s2End = 0.38;
+          if (phase >= s2Start && phase < s2End) {
+            s2 = Math.sin((phase - s2Start) / (s2End - s2Start) * Math.PI) * heartbeat.s2Strength;
+          }
+        }
+        pulse = (s1 + s2) * heartbeat.pulseStrength;
+      }
     }
     pf.targetOffset = saccadeConstrict + depthOffset + pulse;
     pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * pupilFocusConfig.responseSpeed);
@@ -2379,7 +2428,9 @@ class FaceTracker {
         const f = preds[0], re = f.landmarks[0], le = f.landmarks[1];
         const cx = (re[0] + le[0]) / 2 / this.video.videoWidth, cy = (re[1] + le[1]) / 2 / this.video.videoHeight;
         const ed = Math.sqrt(Math.pow((re[0] - le[0]) / this.video.videoWidth, 2) + Math.pow((re[1] - le[1]) / this.video.videoHeight, 2));
-        this.controller.face.x = -(cx * 2 - 1) * p.sensitivity + p.parallaxX;
+        // V2.5: mirror toggle compensates for browsers that don't auto-mirror the front cam
+        const mirrorSign = convergenceEnabled.mirrorFaceX ? 1 : -1;
+        this.controller.face.x = mirrorSign * (cx * 2 - 1) * p.sensitivity + p.parallaxX;
         this.controller.face.y = -(cy * 2 - 1) * p.sensitivity + p.parallaxY;
         this.controller.face.z = Math.min(1.0, ed * 4.0);
         this.controller.face.detected = true;
@@ -2858,6 +2909,12 @@ async function main() {
   const gConv = gui.addFolder('Per-eye tracking');
   gConv.add(convergenceEnabled, 'enabled').name('per-eye tracking ON/OFF');
   gConv.add(convergenceEnabled, 'showDebugHud').name('DEBUG HUD (show angles)');
+  gConv.add(convergenceEnabled, 'showTargetMarker').name('show target marker (3D)').onChange(v => {
+    if (renderer._targetMarker) renderer._targetMarker.visible = v;
+  });
+  gConv.add(convergenceConfig, 'targetDistance', 2, 20, 0.5).name('target distance');
+  gConv.add(convergenceConfig, 'lateralScale', 0.5, 15, 0.5).name('lateral scale');
+  gConv.add(convergenceConfig, 'verticalScale', 0.5, 10, 0.5).name('vertical scale');
   gConv.close();
 
   // V2.4: pupil focus fine controls
@@ -2868,21 +2925,26 @@ async function main() {
   gPupil.add(pupilFocusConfig, 'responseSpeed', 1, 30, 0.5).name('response speed');
   gPupil.close();
 
-  // V2.4: heartbeat mode — coupled with tension
+  // V2.4+V2.5: heartbeat mode — coupled with tension + frequency/irregularity/double pulse
   const gHeart = gui.addFolder('Heartbeat');
   gHeart.add(heartbeat, 'enabled').name('enabled');
-  gHeart.add(heartbeat, 'bpm', 40, 150, 1).name('BPM');
+  gHeart.add(heartbeat, 'bpm', 30, 180, 1).name('BPM');
+  gHeart.add(heartbeat, 'frequency', 0, 1, 0.01).name('frequency (1=continuous)');
+  gHeart.add(heartbeat, 'irregularity', 0, 1, 0.01).name('irregularity');
   gHeart.add(heartbeat, 'pulseStrength', 0, 0.3, 0.01).name('pulse strength');
+  gHeart.add(heartbeat, 'doublePulse').name('double pulse (lub-dub)');
+  gHeart.add(heartbeat, 's2Strength', 0, 1, 0.01).name('  S2 strength');
   gHeart.add(heartbeat, 'tensionCouple').name('tension drives BPM');
   gHeart.close();
 
-  // V2.3: live webcam + tracking overlay — see what the machine sees
+  // V2.3+V2.5: live webcam + tracking overlay + mirror toggle
   const tracking = { showWebcam: false };
   const gTrack = gui.addFolder('Camera feed');
   gTrack.add(tracking, 'showWebcam').name('show webcam + face bbox').onChange(v => {
     document.getElementById('webcam-debug').style.display = v ? 'block' : 'none';
     document.getElementById('webcam-overlay').style.display = v ? 'block' : 'none';
   });
+  gTrack.add(convergenceEnabled, 'mirrorFaceX').name('mirror (flip horizontal)');
   gTrack.close();
 
   // Start tracking
