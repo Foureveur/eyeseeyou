@@ -1154,6 +1154,25 @@ class EyeRenderer {
       bumpScale: 0.003,
       side: THREE.FrontSide, depthWrite: true, depthTest: true,
     });
+    // V2 Tâche 1.2: SSS warm rim on eyelid edges.
+    // Anatomically: eyelid skin is very thin, back-lit edges glow red/orange (capillaries).
+    // Simulated via rim-factor (pow(1 - |n·v|, 2)) mixed into warm tone.
+    skinMat.userData.sssIntensity = { value: 0.22 };  // intensity uniform
+    skinMat.onBeforeCompile = (shader) => {
+      shader.uniforms.sssIntensity = skinMat.userData.sssIntensity;
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', `
+#include <common>
+uniform float sssIntensity;
+`)
+        .replace('#include <dithering_fragment>', `
+#include <dithering_fragment>
+// V2 SSS warm rim (Tâche 1.2)
+float _rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
+vec3 _warm = vec3(0.90, 0.35, 0.25);
+gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
+`);
+    };
     const innerLidMat = new THREE.MeshPhysicalMaterial({
       color: 0xd4857a, roughness: 0.5, metalness: 0.0,
       sheen: 0.5, sheenColor: new THREE.Color(0xffccbb),
