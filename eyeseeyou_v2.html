@@ -793,10 +793,20 @@ class EyeRenderer {
 
   setReflectionIntensity(v) {
     this._reflectionIntensity = v;
-    // Cornea uses its own envMapIntensity base (corneaEnv slider)
+    // V2.10: "intensity 0 = no visible reflection" requires attenuating three sources:
+    //   (a) env IBL reflection via envMapIntensity (env feed / studio)
+    //   (b) clearcoat — a second specular layer that uses envMap AND direct lights
+    //   (c) reflectivity — Fresnel term controlling direct-light specular strength
+    // When the slider is near 0, both env reflections AND the bright dots from
+    // keyLight/fillLight/rimLight should fade away.
     const base = this._corneaEnvBase || 2.5;
-    for (const m of this.corneaMaterials) m.envMapIntensity = base * v;
-    // Iris + sclera get direct intensity
+    const clearcoatBase = this._corneaClearcoatBase ?? 1.0;
+    const reflectivityBase = this._corneaReflectivityBase ?? 0.5;
+    for (const m of this.corneaMaterials) {
+      m.envMapIntensity = base * v;
+      m.clearcoat = clearcoatBase * v;            // direct-light specular scales too
+      m.reflectivity = reflectivityBase * v;      // base Fresnel reflection scales
+    }
     for (const m of this.irisMaterials) m.envMapIntensity = v;
     for (const m of this.scleraMaterials) m.envMapIntensity = v;
   }
@@ -1482,10 +1492,23 @@ gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);
   }
 
   setCorneaParam(prop, v) {
+    // V2.10: store the "base" for params that the global reflection intensity scales.
     if (prop === 'envMapIntensity') {
       this._corneaEnvBase = v;
-      const ri = this._reflectionIntensity || 1.0;
+      const ri = this._reflectionIntensity ?? 1.0;
       for (const m of this.corneaMaterials) m.envMapIntensity = v * ri;
+      return;
+    }
+    if (prop === 'clearcoat') {
+      this._corneaClearcoatBase = v;
+      const ri = this._reflectionIntensity ?? 1.0;
+      for (const m of this.corneaMaterials) m.clearcoat = v * ri;
+      return;
+    }
+    if (prop === 'reflectivity') {
+      this._corneaReflectivityBase = v;
+      const ri = this._reflectionIntensity ?? 1.0;
+      for (const m of this.corneaMaterials) m.reflectivity = v * ri;
       return;
     }
     for (const m of this.corneaMaterials) m[prop] = v;
