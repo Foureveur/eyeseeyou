@@ -1,14 +1,15 @@
 # EyeSeeYou — Project Tracker
 
-> **Version actuelle : v0.6**
+> **Version actuelle : v3.0** (`eyeseeyou_v3.html`)
 > Suivi des sprints, TODO et roadmap du projet EyeSeeYou (rendu 3D réaliste d'yeux en Three.js)
+> Cadrage produit : voir `PRODUCT.md` · Système visuel : voir `DESIGN.md`
 
 ## Stack
 
 - Three.js r170 (ES modules, CDN importmap)
-- Single HTML file: `eyeseeyou_v1.html`
-- GLB model: `eye.glb` (TinyEye — iris + sclera, 12 morph targets)
-- BlazeFace face tracking (MediaPipe)
+- Single HTML file: `eyeseeyou_v3.html` (v1/v2 conservés pour référence)
+- **Yeux 100% procéduraux** — plus de GLB ; eye-shader unifié sur MeshPhysicalMaterial
+- MediaPipe FaceLandmarker (tasks-vision, 478 landmarks + blendshapes)
 - Serveur: `npx http-server . -p 8080`
 
 ## Architecture
@@ -61,7 +62,78 @@
 
 ---
 
-## Sprint actuel — Sprint 6 : Polish & Features avancées
+## Sprint 7 — v3 : Eye shader unifié (2026-07-11)
+
+- Fork `eyeseeyou_v3.html` depuis v2.11
+- **Eye-shader unifié** : iris procédural (fibres radiales périodiques, cryptes, collarette),
+  pupille SDF (formes cat/goat/oval/reptile/heart en warp), **réfraction cornéenne physique**
+  (Snell, IOR, plan iris en retrait), limbus dégradé, sclère éclairée (veines, blush, rim SSS)
+- Supprimés : GLB + stencil ghost + limbus ring mesh + catchlight discs + iris parallax hack
+- Paupières chair : profil drapé (marge/creux/pli), ramp albedo (ligne de cils, marbrures),
+  ombre de contact alpha-gradient, waterline humide (clearcoat) ; mode flat noir préservé
+- **MediaPipe FaceLandmarker** remplace BlazeFace : distance réelle (écart inter-iris),
+  blendshapes (blink mirroring, sourire → dilatation), multi-visages (attention alternée)
+- **4 personnalités** (neutral/uncanny/charming/curious) pilotant state + gaze mode + blink + pupille
+- `prefers-reduced-motion` respecté ; localStorage v3 séparé
+- Cadrage : PRODUCT.md + DESIGN.md créés (workflow Impeccable)
+
+---
+
+## Sprint 8 — v3.4 : Hand tracking (2026-07-11)
+
+- **MediaPipe GestureRecognizer** ajouté à côté du FaceLandmarker (même flux webcam,
+  passe mains 1 tick sur 2 ≈ 15 Hz) — 21 landmarks + gestes classifiés en un modèle
+- **Doigt pointé > visage** : index tendu (toute direction, détection custom tip/PIP)
+  → l'œil verrouille le bout du doigt de la main la plus proche (plus grande taille
+  apparente poignet→MCP majeur) dans TOUS les gaze modes
+- **Louchement max** : taille apparente de la main → profondeur ; targetZ autorisé
+  jusqu'à 1.35 (> 1 = zone cross-eye), `faceDist` flooré dans setGaze pour ne jamais
+  passer derrière les yeux. Triade de près : convergence + accommodation pupille
+- **Réactions gestuelles** : poing = squint + myosis (tension) ; pouce/victory/ILY =
+  joie soutenue (paupière inf. remonte, mydriase légère) ; coucou paume ouverte
+  (≥3 inversions de direction en 1,5 s) = squint joyeux + double-blink ; main qui
+  fonce vers l'objectif = flinch (blink réflexe + paupières écarquillées + spike pupille)
+- lil-gui folder « Hand tracking » (enabled, reactions, proximity gain, max cross-eye,
+  flinch threshold) + persistance localStorage + HUD/overlay webcam (anneau cyan doigt)
+- `window.__eye` : handle debug console (controller, tracker, handConfig)
+
+### v3.5 — Emotion pulses + la totale des réactions (même jour)
+
+- **EmotionPulse** : liaison unifiée émotions ↔ paramètres. Les gestes passent par les
+  MÊMES tables `EMOTIONS` (lids, tilts, slant, width, pupille) + `EMOTION_STATE`
+  (tension/curiosité/alertness/fatigue → saccades, tremor, réactivité, BPM) que les
+  boutons emoji. `pulseEmotion(name, k, hold)` : attaque rapide (startle), decay expo ;
+  `hold` soutient tant que le geste dure. `getEffState()` = état global + blend du pulse
+  (les vitals lisent ça, jamais de mutation des sliders lil-gui)
+- Recâblage : flinch→fear, poing→anger (hold), 👍/✌️/🤟→joy (hold), wave→joy pulse
+- **🤏 Pince** : détection pouce+index (thumbExt vs pinky-MCP, gap normalisé) → contrôle
+  DIRECT de la pupille (gap 0→0.07, gap max→0.80). Prioritaire sur pointing
+- **🖕** : majeur seul tendu → contempt pulse + regard détourné ostensible 2,2 s
+  (côté opposé à la main, légèrement vers le haut) + blink lent dédaigneux
+- **✋ Stop** : paume ouverte proche immobile ≥600 ms → freeze (retenue de souffle) :
+  drift/saccades/tremor amortis à zéro, blinks supprimés (réflexes forcent le passage)
+- **👆🌀 Vertige** : rotation cumulée de la direction du doigt ≥ ~1,75 tour → spirale
+  oculaire rentrante 1,1 s + blink de reset + pulse surprise (rate-limit 6 s)
+- **🫣 Cache-cache** : visage perdu 0,5–5 s avec une main plein cadre → surprise + blink
+  à la réapparition
+- Ordre de priorité du regard : dizzy > lookAway > doigt pointé > modes (Track/Motion/Lurk)
+- HUD : lignes hand (geste/pinch/z) + pulse (nom/intensité/hold) + freeze
+
+### v3.6 — Anti-jitter doigt (même jour)
+
+- **Filtre One-Euro-lite** sur la cible doigt (x/y/z) : lissage fort au repos (blend
+  `handConfig.smoothing` 0.3), facteur qui monte avec la vitesse → balayages rapides
+  réactifs. Testé : −72 % de jitter, grand mouvement suivi en 2 ticks
+- **Hystérésis pointing** : engage après 2 ticks consécutifs, relâche après 4 —
+  la pose brute clignote aux angles limites, le regard ne flippe plus doigt/visage
+- Flinch calculé sur le z BRUT (le lissage masquerait la ruée) ; détecteurs
+  wave/cercle/paume immobile restent sur la position brute
+- Webcam feed affiché par défaut (+ touche `d` toggle vidéo ET overlay ensemble)
+- Slider « finger snappiness » dans le folder Hand tracking
+
+---
+
+## Sprint suivant — Sprint 9 : pistes
 
 ### TODO réalisme visuel
 - [ ] **SSS sclera** — Subsurface scattering léger sur la sclera (veinules rougeâtres translucides)
@@ -79,8 +151,9 @@
 
 | Bug | Statut | Notes |
 |-----|--------|-------|
-| Shadow maps → artefacts sur géométrie courbe | Abandonné | Approche shadow strip suffisante pour l'instant |
-| Pupille non-ronde | À fixer dans Blender | Le mesh iris du GLB n'est pas un cercle parfait |
+| Shadow maps → artefacts sur géométrie courbe | Abandonné | Éclairage envmap + ombre de contact alpha-gradient suffisent |
+| Pupille non-ronde | **Résolu (v3)** | Pupille = SDF shader, ronde par construction — le GLB n'est plus utilisé |
+| SSS paupières invisible (v2) | **Résolu (v3)** | Material.clone() ne copie pas onBeforeCompile → shader appliqué par instance |
 
 ---
 
