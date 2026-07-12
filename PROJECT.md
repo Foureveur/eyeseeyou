@@ -131,6 +131,31 @@
 - Webcam feed affiché par défaut (+ touche `d` toggle vidéo ET overlay ensemble)
 - Slider « finger snappiness » dans le folder Hand tracking
 
+### v3.7 — Modal gestes + cils anatomiques + poids + binoculaire (2026-07-12)
+
+- **Modal d'aide gestes** : bouton ✋ dans la bottombar (+ touche `h`), 11 gestes
+  documentés, blur d'arrière-plan, fermeture Esc/clic-hors/×
+- **Cils refondus** (réf. PMC6147748, StatPearls, Amador 2015) : modèle par touffes
+  qui PAVENT l'arc en continu (chaque touffe possède un slot contigu ; les cils ne
+  jittent qu'à l'intérieur → plus de trous). Gradients : densité max au centre,
+  longueur max en temporal (« cat-eye »), courbure max en médial/central. Le slider
+  `clumping` contrôle la séparation des touffes sans jamais créer de trou nu
+- **Poids / gravité** (`weightConfig`, folder lil-gui) : (a) inertie du regard —
+  masse virtuelle sous-amortie → overshoot/glissade post-saccadique (0% au défaut
+  0.45, jusqu'à 12% au max) ; (b) affaissement gravitaire des paupières sup. entre
+  les clignements, effacé à chaque blink, amplifié par la fatigue ; (c) fermeture de
+  blink accélérée (22% vs 78% réouverture) + rebond
+- **Cohérence binoculaire** (fix « part en couille ») : `setGaze` décompose désormais
+  le regard en VERSION (direction commune) + VERGENCE (croisement symétrique plafonné
+  à `maxVergence`=28°, +`crossVergence`=20° doigt au ras). Version et vergence clampées
+  SÉPARÉMENT puis recomposées → les 2 yeux restent exactement symétriques quelle que
+  soit la distance/le jitter (saut de vergence : 15.7°→1.3° en test de wiggle latéral).
+  Le floor de `faceDist` relevé à camZ×0.32 pour éviter la singularité du look-at
+- **Toggle « per-eye tracking »** : désormais le modèle par-œil EST le modèle cohérent
+  (version+vergence). Le toggle OFF bascule sur le fallback V1 parallèle (moins réaliste).
+  Recommandation : garder ON (défaut forcé au load) ; le toggle ne sert plus qu'à l'A/B debug
+- `window.__eye` expose maintenant renderer, weightConfig, convergenceConfig
+
 ---
 
 ## Sprint suivant — Sprint 9 : pistes
