@@ -302,11 +302,12 @@ const gazeCoupling = {
 
 // V3.3: live lash controls (rebuilds geometry on change — user tunes at full res)
 const lashConfig = {
-  density: 2.7,     // multiplies anatomical count
+  density: 3.3,     // multiplies anatomical count
   thickness: 1.6,   // root width multiplier (→ mascara look)
   length: 1.1,      // length multiplier
   curl: 1.0,        // J-curl multiplier
   clumping: 0.12,   // 0 = continuous comb (roots overlap), 1 = separated tufts
+  femininity: 0.72, // V3.8: 0 = masculine (short/straight/sparse), 1 = feminine (long/curled/wispy)
 };
 
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
@@ -621,18 +622,21 @@ function createLidEdgeStrip(outerGeo, innerGeo, segsU) {
 }
 
 function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight = false) {
-  // V3.7: anatomy-driven lash fringe (refs: PMC6147748 review, StatPearls, Amador 2015).
-  // Real lashes emerge from GROUPED follicles in tufts of ~2-4, but the tufts TILE the
-  // margin continuously — there is no bare gap between them. Earlier versions scattered
-  // each lash by ±0.9× the spacing, tearing holes. Here each tuft owns a contiguous slot
-  // of the margin; lashes jitter only WITHIN their slot, so the root band stays solid.
-  //   • upper 90-160 lashes / 5-6 rows, lower 75-80 / 3-4 (StatPearls)
-  //   • densest at centre, thinning to the canthi; nasal sparser than temporal
-  //   • length ~1/3 eye width, temporal longest (the "cat-eye" flare)
-  //   • curvature strongest medial/central, lateral straighter (PMC review)
+  // V3.8: WISP model — matched to real-lash reference. The signature features of a
+  // real lash line, none of which the earlier "fan of triangles" had:
+  //   1. DIRECTIONAL FLOW — lashes don't radiate like a sunburst. They stream: near-
+  //      vertical at the inner canthus, leaning progressively OUTWARD toward the temporal
+  //      corner where they grow longest and flare (the cat-eye "wing").
+  //   2. TIP-CONVERGENT WISPS — several lashes in a group share a converging TIP point,
+  //      forming the pointed wisps you see in the reference; roots stay spread along a
+  //      continuous line. (Earlier code fanned the tips apart — exactly backwards.)
+  //   3. Strong C-curl, ragged lengths, fine translucent tips (root→tip colour ramp).
+  //   4. femininity slider: ♀ long/curled/dense/wispy · ♂ short/straight/sparse.
+  // refs: PMC6147748, StatPearls (upper 90-160/5-6 rows, lower 75-80/3-4), Amador 2015.
   const pos = outerGeo.getAttribute('position');
   const nrm = outerGeo.getAttribute('normal');
   const verts = [];
+  const colors = [];
   const indices = [];
   const SEG = 8;                               // curve segments — thin curved strands need more
   const startFrac = 0.285, endFrac = 0.715;   // lashes live on the frontal arc only
@@ -640,84 +644,92 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const sign = isUpper ? 1 : -1;
   const RR = outerGeo.userData?.radius || 0.7;
   const DENS = lashConfig.density, THK = lashConfig.thickness, LENM = lashConfig.length, CURLM = lashConfig.curl;
-  // clumping 0 → near-even comb, 1 → pronounced separated tufts (but never bare gaps)
   const CLUMP = lashConfig.clumping;
-  const total = Math.round(lashCount * DENS);
-  const perTuft = isUpper ? 2.7 : 2.3;               // follicles cluster in small groups
+  // femininity 0 (masculine) .. 1 (feminine) — drives length, curl, density, wispiness
+  const FEM = lashConfig.femininity;
+  const fLen = lerp(0.70, 1.30, FEM), fCurl = lerp(0.42, 1.15, FEM);
+  const fDens = lerp(0.72, 1.18, FEM), fConv = lerp(0.2, 0.55, FEM), fThin = lerp(1.25, 0.82, FEM);
+  const total = Math.round(lashCount * DENS * fDens);
+  const perTuft = isUpper ? 2.7 : 2.3;               // follicles cluster in small wisps
   const nTufts = Math.max(8, Math.round(total / perTuft));
-  const slot = arcSpan / nTufts;                     // each tuft owns this contiguous slice
-  const rowMaxDepth = isUpper ? 0.058 : 0.042;       // how far the back rows sit up the lid
+  const slot = arcSpan / nTufts;                     // each wisp owns this contiguous slice
+  const rowMaxDepth = isUpper ? 0.05 : 0.038;        // how far back rows sit up the lid
+  const fanDir = isRight ? -1 : 1;
+  // root→tip colour ramp: near-black base, warmer/lighter translucent-looking tip
+  const rootCol = [0.025, 0.015, 0.01], tipCol = [0.10, 0.07, 0.052];
 
-  const P0 = new THREE.Vector3(), P1 = new THREE.Vector3(), P2 = new THREE.Vector3();
+  const P0 = new THREE.Vector3(), P1 = new THREE.Vector3(), P2 = new THREE.Vector3(), Pmid = new THREE.Vector3();
   const N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
-  const pt = new THREE.Vector3();
+  const Ptip = new THREE.Vector3(), pt = new THREE.Vector3();
 
   for (let c = 0; c < nTufts; c++) {
-    // Tuft centre marches evenly across the arc (tiny wobble so it isn't a grid)
-    const uTuft = (c + 0.5) / nTufts + (Math.random() - 0.5) * 0.12 / nTufts;
-    const tArc = Math.min(1, Math.max(0, uTuft));            // 0..1 across the visible arc
-    const nasal = isRight ? tArc : (1.0 - tArc);            // 0 = nasal (inner) end
-    const temporal = 1.0 - nasal;                           // 1 = temporal (outer) end
-    // Density envelope: full at centre, tapering to the corners, nasal thinner
-    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.5); // 0 at canthi → 1 mid-lid
-    const density = centre * (0.62 + 0.38 * temporal);
-    // Lashes in this tuft — 2-4 at the dense centre, down to ~2 at the corners
-    const nInTuft = Math.max(isUpper ? 2 : 1, Math.round((isUpper ? 2.2 : 1.7) + density * (isUpper ? 2.4 : 1.6)));
-    // Tuft footprint on the margin: at low clumping a tuft OVERSPILLS its slot so
-    // neighbours interleave → a continuous dense root band (only the tips separate).
-    // Higher clumping shrinks the footprint back toward visible tuft separation.
-    const tuftW = slot * (1.25 - CLUMP * 0.7);
+    const uTuft = (c + 0.5) / nTufts + (Math.random() - 0.5) * 0.1 / nTufts;
+    const tArc = Math.min(1, Math.max(0, uTuft));
+    const nasal = isRight ? tArc : (1.0 - tArc);           // 0 = nasal (inner)
+    const temporal = 1.0 - nasal;                          // 1 = temporal (outer)
+    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.5);// density envelope (thins at canthi)
+    const density = centre * (0.6 + 0.4 * temporal);
+    const nInTuft = Math.max(isUpper ? 2 : 1, Math.round((isUpper ? 2.2 : 1.5) + density * (isUpper ? 2.6 : 1.5)));
+    const tuftW = slot * (1.2 - CLUMP * 0.6);              // wisps overspill → continuous roots
+
+    // ── Shared wisp geometry (computed once per cluster) ──
+    // Root frame at the cluster centre
+    const tC = startFrac + tArc * arcSpan;
+    const iC = Math.max(0, Math.min(segsU, Math.round(tC * segsU)));
+    N.set(nrm.getX(iC), nrm.getY(iC), nrm.getZ(iC)).normalize();
+    T.set(0, sign, 0);
+    B.crossVectors(N, T).normalize();
+    // Cluster length: LONGEST at the temporal third (wing), shorter nasal. Only mildly
+    // thinned by the density envelope so the outer corner keeps its long lashes.
+    const lenProfile = lerp(0.6, 1.25, temporal) * (0.85 + 0.15 * centre);
+    const clusterLen = RR * (isUpper ? 0.27 : 0.14) * LENM * fLen * lenProfile * (0.72 + Math.random() * 0.4);
+    // Wisp tip direction, kept GENTLE so the fringe hugs the lid instead of spraying:
+    //   OUT (N, dominant) + a moderate UP-curl (T) + a SUBTLE lateral sweep toward the
+    //   temporal corner (B, a little stronger at the wing). Earlier values were ~3× too
+    //   large → near-horizontal streaks. Lateral must stay well under the up/out terms.
+    const upC = fCurl * (isUpper ? 1 : -1) * (0.85 - 0.22 * temporal) * (0.85 + Math.random() * 0.25);
+    const latC = fanDir * (0.05 + temporal * 0.34) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM);
+    const outC = 0.66;
+    // Cluster centre root point, then the shared converging tip
+    const cx = pos.getX(iC), cy = pos.getY(iC), cz = pos.getZ(iC);
+    Ptip.set(cx, cy, cz)
+      .addScaledVector(N, clusterLen * outC)
+      .addScaledVector(T, clusterLen * upC)
+      .addScaledVector(B, clusterLen * latC);
 
     for (let k = 0; k < nInTuft; k++) {
-      // Even spread inside the tuft + micro jitter → tight cluster, no internal gaps
       const kf = nInTuft > 1 ? (k / (nInTuft - 1) - 0.5) : 0;
-      const t = startFrac + tArc * arcSpan + kf * tuftW + (Math.random() - 0.5) * tuftW * 0.28;
+      const t = tC + kf * tuftW + (Math.random() - 0.5) * tuftW * 0.3;
       const tt = Math.min(endFrac, Math.max(startFrac, t));
-
-      // Staggered depth: front lashes on the very margin, a few set back a hair (rows,
-      // but continuous rather than banded). Front row longest.
-      const rowDepth = Math.pow(Math.random(), 1.6) * rowMaxDepth;
-      const rowLenMul = 1.0 - (rowDepth / rowMaxDepth) * 0.22;
+      const rowDepth = Math.pow(Math.random(), 1.7) * rowMaxDepth;
 
       const i = Math.max(0, Math.min(segsU, Math.round(tt * segsU)));
-      const i2 = Math.min(pos.count - 1, i + (segsU + 1));   // same u, next v ring (inward)
+      const i2 = Math.min(pos.count - 1, i + (segsU + 1));
       P0.set(
         pos.getX(i) + (pos.getX(i2) - pos.getX(i)) * rowDepth,
         pos.getY(i) + (pos.getY(i2) - pos.getY(i)) * rowDepth,
         pos.getZ(i) + (pos.getZ(i2) - pos.getZ(i)) * rowDepth,
       );
-      N.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i)).normalize();
 
-      // Length: temporal flare (longest outer), tapering at the canthi. Amador ~1/3
-      // width. HEAVY per-lash variation (0.4..1.5×) so the silhouette is ragged and
-      // feathered, never a clean comb edge — real lashes differ wildly in length.
-      const lenProfile = centre * lerp(0.82, 1.18, temporal);
-      const lenVar = 0.4 + Math.pow(Math.random(), 1.7) * 1.15;
-      const len = RR * (isUpper ? 0.30 : 0.15) * LENM * rowLenMul * lenProfile * lenVar;
-      if (len < RR * 0.02) continue;
-      // Curl: strongest medial/central, lateral straighter (PMC review). Big per-lash
-      // spread so some hairs are near-straight and others strongly C-curled.
-      const curlProfile = lerp(0.72, 1.12, nasal) * (0.86 + 0.24 * centre);
-      const curl = (isUpper ? 0.75 : 0.32) * (0.55 + 0.45 * curlProfile + Math.random() * 0.5) * CURLM;
-      // Fan: only the TIPS splay (roots stay put) — gentle regional lean + per-lash
-      // scatter so neighbouring hairs cross instead of marching in parallel.
-      const fanDir = isRight ? -1 : 1;
-      const fan = fanDir * (temporal - 0.5) * 0.22 + kf * 0.12 + (Math.random() - 0.5) * (0.28 + CLUMP * 0.3);
+      // Per-lash length variation → ragged, feathered silhouette. Tip = a point along
+      // the root→sharedTip line, scaled by lenVar; fConv pulls the tip toward the SHARED
+      // tip (wisp) vs. leaving it above the lash's own root (comb). Feminine = wispier.
+      const lenVar = 0.66 + Math.pow(Math.random(), 1.5) * 0.7;
+      // "own tip" if the lash didn't converge (keeps its root's lateral offset)
+      const ownTipB = kf * tuftW * (1 - fConv);
+      P2.copy(Ptip).addScaledVector(B, ownTipB)
+        .addScaledVector(T, (Math.random() - 0.5) * clusterLen * 0.12);
+      // scale from root by lenVar (shorter lashes fall short of the shared tip)
+      P2.sub(P0).multiplyScalar(lenVar).add(P0);
+      if (P2.distanceTo(P0) < RR * 0.02) continue;
 
-      T.set(0, sign, 0);
-      B.crossVectors(N, T).normalize();
+      // Belly bows OUTWARD (+N) and up from the straight root→tip chord → real C-curve
+      Pmid.copy(P0).add(P2).multiplyScalar(0.5);
+      const bow = clusterLen * (0.12 + 0.16 * fCurl) * (0.7 + Math.random() * 0.6);
+      P1.copy(Pmid).addScaledVector(N, bow).addScaledVector(T, bow * 0.3 * sign);
 
-      // C-curve control points. The lash leaves the margin pointing outward, its belly
-      // lifts, and the tip sweeps up (down for the lower lid). Per-lash "lift" varies
-      // how upright vs. flat it sits — the main source of angular variety.
-      const dip = (isUpper ? 0.14 : 0.06) * (0.6 + Math.random() * 0.9);
-      const lift = 0.35 + Math.random() * 0.5;
-      P1.copy(P0).addScaledVector(N, len * 0.50).addScaledVector(T, len * (lift * 0.4 - dip)).addScaledVector(B, fan * len * 0.35);
-      P2.copy(P0).addScaledVector(N, len * 0.62).addScaledVector(T, len * curl).addScaledVector(B, fan * len);
-
-      // Filament, not a wedge: THIN and near-constant width, tapering to a fine point
-      // only in the last third. Small w0 so a flat strip reads as a hair, not a fang.
-      const w0 = RR * 0.0036 * THK * (0.65 + Math.random() * 0.6);
+      // Thin filament, finer when feminine; near-constant width, fine point past 65%
+      const w0 = RR * 0.0036 * THK * fThin * (0.6 + Math.random() * 0.6);
       const base = verts.length / 3;
       const pl = Math.sqrt(N.x * N.x + N.z * N.z) || 1;
       const px = -N.z / pl, pz = N.x / pl;
@@ -729,11 +741,13 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
           a * P0.y + b2 * P1.y + cc * P2.y,
           a * P0.z + b2 * P1.z + cc * P2.z,
         );
-        // strand profile: ~constant along the shaft, fine point past 65%
-        const taper = u < 0.65 ? (1.0 - 0.25 * u) : (1.0 - 0.25 * 0.65) * Math.max(0, (1 - u) / 0.35);
-        const w = w0 * taper + RR * 0.00012;
-        verts.push(pt.x - px * w, pt.y, pt.z - pz * w);
-        verts.push(pt.x + px * w, pt.y, pt.z + pz * w);
+        const taper = u < 0.65 ? (1.0 - 0.22 * u) : (1.0 - 0.22 * 0.65) * Math.max(0, (1 - u) / 0.35);
+        const w = w0 * taper + RR * 0.0001;
+        const cr = rootCol[0] + (tipCol[0] - rootCol[0]) * u;
+        const cg = rootCol[1] + (tipCol[1] - rootCol[1]) * u;
+        const cb = rootCol[2] + (tipCol[2] - rootCol[2]) * u;
+        verts.push(pt.x - px * w, pt.y, pt.z - pz * w); colors.push(cr, cg, cb);
+        verts.push(pt.x + px * w, pt.y, pt.z + pz * w); colors.push(cr, cg, cb);
         if (sg > 0) {
           const kk = base + (sg - 1) * 2;
           indices.push(kk, kk + 1, kk + 2, kk + 1, kk + 3, kk + 2);
@@ -745,6 +759,7 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const geo = new THREE.BufferGeometry();
   geo.setIndex(indices);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
   geo.computeVertexNormals();
   return geo;
 }
@@ -1470,7 +1485,8 @@ class EyeRenderer {
       // Lashes — procedural triangle strips along lid edge
       const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);   // anatomical counts (90-160 / 75-80)
       const lashMat = new THREE.MeshBasicMaterial({
-        color: 0x120a05,
+        color: 0xffffff,          // V3.8: white so per-vertex root→tip colour shows through
+        vertexColors: true,
         side: THREE.DoubleSide,
         depthWrite: true,
         depthTest: true,
@@ -3571,7 +3587,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -3717,6 +3733,13 @@ async function main() {
   // V3.3: live lash controls — rebuild geometry on change
   const gLash = gui.addFolder('Lashes');
   const rebuild = () => renderer.rebuildLashes();
+  gLash.add(lashConfig, 'femininity', 0, 1, 0.02).name('♂ ← femininity → ♀').onChange(rebuild).listen();
+  const lashPreset = {
+    feminine() { Object.assign(lashConfig, { femininity: 0.9, density: 3.0, length: 1.25, curl: 1.25, thickness: 1.5, clumping: 0.18 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+    masculine() { Object.assign(lashConfig, { femininity: 0.12, density: 1.9, length: 0.85, curl: 0.55, thickness: 1.35, clumping: 0.1 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+  };
+  gLash.add(lashPreset, 'feminine').name('♀ preset');
+  gLash.add(lashPreset, 'masculine').name('♂ preset');
   gLash.add(lashConfig, 'density', 0, 4, 0.05).name('density').onChange(rebuild);
   gLash.add(lashConfig, 'thickness', 0.3, 4, 0.05).name('thickness (mascara)').onChange(rebuild);
   gLash.add(lashConfig, 'length', 0.3, 2.5, 0.05).name('length').onChange(rebuild);
