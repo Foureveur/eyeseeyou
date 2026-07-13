@@ -302,11 +302,11 @@ const gazeCoupling = {
 
 // V3.3: live lash controls (rebuilds geometry on change — user tunes at full res)
 const lashConfig = {
-  density: 2.2,     // multiplies anatomical count
+  density: 2.7,     // multiplies anatomical count
   thickness: 1.6,   // root width multiplier (→ mascara look)
   length: 1.1,      // length multiplier
   curl: 1.0,        // J-curl multiplier
-  clumping: 0.2,    // 0 = perfectly even comb, 1 = separated tufts
+  clumping: 0.12,   // 0 = continuous comb (roots overlap), 1 = separated tufts
 };
 
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
@@ -643,8 +643,8 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   // clumping 0 → near-even comb, 1 → pronounced separated tufts (but never bare gaps)
   const CLUMP = lashConfig.clumping;
   const total = Math.round(lashCount * DENS);
-  const perTuft = isUpper ? 3.2 : 2.6;               // follicles cluster in small groups
-  const nTufts = Math.max(6, Math.round(total / perTuft));
+  const perTuft = isUpper ? 2.7 : 2.3;               // follicles cluster in small groups
+  const nTufts = Math.max(8, Math.round(total / perTuft));
   const slot = arcSpan / nTufts;                     // each tuft owns this contiguous slice
   const rowMaxDepth = isUpper ? 0.058 : 0.042;       // how far the back rows sit up the lid
 
@@ -661,11 +661,12 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     // Density envelope: full at centre, tapering to the corners, nasal thinner
     const centre = Math.pow(Math.sin(tArc * Math.PI), 0.5); // 0 at canthi → 1 mid-lid
     const density = centre * (0.62 + 0.38 * temporal);
-    // Lashes in this tuft — 2-4 at the dense centre, down to 1-2 at the corners
-    const nInTuft = Math.max(1, Math.round((isUpper ? 1.6 : 1.2) + density * (isUpper ? 2.6 : 1.8)));
-    // Tuft footprint on the margin: a solid tuft covers ~70% of its slot at clumping 0
-    // (adjacent tufts touch) shrinking to ~40% at clumping 1 (visible separation).
-    const tuftW = slot * (0.72 - CLUMP * 0.34);
+    // Lashes in this tuft — 2-4 at the dense centre, down to ~2 at the corners
+    const nInTuft = Math.max(isUpper ? 2 : 1, Math.round((isUpper ? 2.2 : 1.7) + density * (isUpper ? 2.4 : 1.6)));
+    // Tuft footprint on the margin: at low clumping a tuft OVERSPILLS its slot so
+    // neighbours interleave → a continuous dense root band (only the tips separate).
+    // Higher clumping shrinks the footprint back toward visible tuft separation.
+    const tuftW = slot * (1.25 - CLUMP * 0.7);
 
     for (let k = 0; k < nInTuft; k++) {
       // Even spread inside the tuft + micro jitter → tight cluster, no internal gaps
@@ -694,9 +695,10 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       // Curl: strongest medial/central, lateral straighter (PMC review); jittered per lash
       const curlProfile = lerp(0.72, 1.12, nasal) * (0.86 + 0.24 * centre);
       const curl = (0.58 + 0.30 * curlProfile + Math.random() * 0.16) * CURLM;
-      // Fan: lashes splay outward toward their own canthus (mild), + per-lash scatter
+      // Fan: only the TIPS splay (roots stay put). Kept small so tufts don't read as
+      // sharp separated triangles — a gentle regional lean + light per-lash scatter.
       const fanDir = isRight ? -1 : 1;
-      const fan = fanDir * (temporal - 0.5) * 0.35 + kf * 0.4 + (Math.random() - 0.5) * (0.12 + CLUMP * 0.22);
+      const fan = fanDir * (temporal - 0.5) * 0.20 + kf * 0.14 + (Math.random() - 0.5) * (0.10 + CLUMP * 0.28);
 
       T.set(0, sign, 0);
       B.crossVectors(N, T).normalize();
