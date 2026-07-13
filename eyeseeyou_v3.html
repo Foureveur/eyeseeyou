@@ -621,137 +621,158 @@ function createLidEdgeStrip(outerGeo, innerGeo, segsU) {
   return geo;
 }
 
+// V3.9: procedural LASH TEXTURE for alpha hair-cards. Draws many fine, curved,
+// tapered hairs with soft anti-aliased edges and translucent tips onto a transparent
+// canvas. Roots sit on the bottom edge (v=0), tips reach up (v=1). One rich texture,
+// tiled by overlapping textured ribbons, reads as a lush fringe from any distance —
+// the industry technique that flat geometry strips can never match head-on.
+let _lashTexCache = null;
+function createLashTexture() {
+  if (_lashTexCache) return _lashTexCache;
+  const W = 512, H = 512;
+  const cv = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
+  if (!cv) return null;
+  cv.width = W; cv.height = H;
+  const g = cv.getContext('2d');
+  g.clearRect(0, 0, W, H);
+  g.lineCap = 'round';
+  const rootY = H - 4;
+  // dense dark root band along the bottom so the lash LINE reads solid
+  const bandGrad = g.createLinearGradient(0, rootY - 26, 0, rootY + 4);
+  bandGrad.addColorStop(0, 'rgba(6,4,3,0)');
+  bandGrad.addColorStop(1, 'rgba(6,4,3,0.95)');
+  g.fillStyle = bandGrad; g.fillRect(0, rootY - 26, W, 30);
+  const N = 44;                                   // hairs across the card
+  for (let i = 0; i < N; i++) {
+    const f = i / (N - 1);
+    const x0 = 10 + f * (W - 20) + (Math.random() - 0.5) * 9;
+    // length: feathered — mix of long and short, longest around the middle
+    const lenBase = 0.5 + 0.45 * Math.sin(f * Math.PI);   // arch, longest mid-card
+    const len = (lenBase + Math.random() * 0.32) * (H - 26);
+    // gentle outward fan + curl: tip drifts sideways and the bezier curves
+    const dir = (f - 0.5) * 2;                     // -1..1 across width
+    const tipX = x0 + dir * 34 + (Math.random() - 0.5) * 22;
+    const tipY = rootY - len;
+    const cx = x0 + dir * 14 + (Math.random() - 0.5) * 12;
+    const cy = rootY - len * (0.45 + Math.random() * 0.15);
+    const rootW = (2.4 + Math.random() * 2.1);     // root thickness (px)
+    // sample the quadratic bezier, draw tapering quads with root→tip alpha/colour fade
+    const STEPS = 26;
+    let prev = null;
+    for (let s = 0; s <= STEPS; s++) {
+      const u = s / STEPS;
+      const a = (1 - u) * (1 - u), b = 2 * (1 - u) * u, c = u * u;
+      const x = a * x0 + b * cx + c * tipX;
+      const y = a * rootY + b * cy + c * tipY;
+      if (prev) {
+        let dx = x - prev.x, dy = y - prev.y; const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
+        const nx = -dy, ny = dx;
+        const w1 = rootW * (1 - prev.u * 0.88) + 0.32;
+        const w2 = rootW * (1 - u * 0.88) + 0.28;
+        // near-black root → dark-brown tip; stays opaque most of the length so the
+        // fringe reads DARK and dense (light-brown earlier looked like peach fuzz)
+        const lum = 4 + u * 12;
+        const al = (1 - u * 0.35) * (0.92 + Math.random() * 0.08);
+        g.fillStyle = `rgba(${Math.round(lum)},${Math.round(lum * 0.72)},${Math.round(lum * 0.55)},${al})`;
+        g.beginPath();
+        g.moveTo(prev.x + nx * w1, prev.y + ny * w1);
+        g.lineTo(prev.x - nx * w1, prev.y - ny * w1);
+        g.lineTo(x - nx * w2, y - ny * w2);
+        g.lineTo(x + nx * w2, y + ny * w2);
+        g.closePath();
+        g.fill();
+      }
+      prev = { x, y, u };
+    }
+  }
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.ClampToEdgeWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  tex.anisotropy = 8;
+  tex.needsUpdate = true;
+  _lashTexCache = tex;
+  return tex;
+}
+
 function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight = false) {
-  // V3.8: WISP model — matched to real-lash reference. The signature features of a
-  // real lash line, none of which the earlier "fan of triangles" had:
-  //   1. DIRECTIONAL FLOW — lashes don't radiate like a sunburst. They stream: near-
-  //      vertical at the inner canthus, leaning progressively OUTWARD toward the temporal
-  //      corner where they grow longest and flare (the cat-eye "wing").
-  //   2. TIP-CONVERGENT WISPS — several lashes in a group share a converging TIP point,
-  //      forming the pointed wisps you see in the reference; roots stay spread along a
-  //      continuous line. (Earlier code fanned the tips apart — exactly backwards.)
-  //   3. Strong C-curl, ragged lengths, fine translucent tips (root→tip colour ramp).
-  //   4. femininity slider: ♀ long/curled/dense/wispy · ♂ short/straight/sparse.
-  // refs: PMC6147748, StatPearls (upper 90-160/5-6 rows, lower 75-80/3-4), Amador 2015.
+  // V3.9: ALPHA HAIR-CARDS. Instead of one flat strip per hair (which foreshortens into
+  // fangs head-on), lay overlapping CURVED RIBBONS along the lid margin, each mapped with
+  // the procedural lash texture above. The texture carries the fine hairs + soft tips; the
+  // ribbon carries the C-curl and the directional flow (vertical at the inner canthus →
+  // leaning out to the temporal wing). Few wide cards → a continuous, lush, silky fringe.
+  //   femininity: ♀ long/curled/dense · ♂ short/straight/sparse.  (refs: PMC6147748, Amador 2015)
   const pos = outerGeo.getAttribute('position');
   const nrm = outerGeo.getAttribute('normal');
-  const verts = [];
-  const colors = [];
-  const indices = [];
-  const SEG = 8;                               // curve segments — thin curved strands need more
-  const startFrac = 0.285, endFrac = 0.715;   // lashes live on the frontal arc only
+  const verts = [], uvs = [], indices = [];
+  const SEGV = 7;                              // ribbon length segments (for the curl)
+  const startFrac = 0.285, endFrac = 0.715;
   const arcSpan = endFrac - startFrac;
   const sign = isUpper ? 1 : -1;
   const RR = outerGeo.userData?.radius || 0.7;
   const DENS = lashConfig.density, THK = lashConfig.thickness, LENM = lashConfig.length, CURLM = lashConfig.curl;
-  const CLUMP = lashConfig.clumping;
-  // femininity 0 (masculine) .. 1 (feminine) — drives length, curl, density, wispiness
   const FEM = lashConfig.femininity;
-  const fLen = lerp(0.70, 1.30, FEM), fCurl = lerp(0.42, 1.15, FEM);
-  const fDens = lerp(0.72, 1.18, FEM), fConv = lerp(0.2, 0.55, FEM), fThin = lerp(1.25, 0.82, FEM);
-  const total = Math.round(lashCount * DENS * fDens);
-  const perTuft = isUpper ? 2.7 : 2.3;               // follicles cluster in small wisps
-  const nTufts = Math.max(8, Math.round(total / perTuft));
-  const slot = arcSpan / nTufts;                     // each wisp owns this contiguous slice
-  const rowMaxDepth = isUpper ? 0.05 : 0.038;        // how far back rows sit up the lid
+  const fLen = lerp(0.72, 1.28, FEM), fCurl = lerp(0.5, 1.2, FEM), fDens = lerp(0.7, 1.2, FEM);
   const fanDir = isRight ? -1 : 1;
-  // root→tip colour ramp: near-black base, warmer/lighter translucent-looking tip
-  const rootCol = [0.025, 0.015, 0.01], tipCol = [0.10, 0.07, 0.052];
+  // card count — few and WIDE (the texture supplies the hair density)
+  const nCards = Math.max(8, Math.round((isUpper ? 20 : 14) * (DENS / 3.0) * fDens));
+  const cardFrac = arcSpan / nCards;
 
-  const P0 = new THREE.Vector3(), P1 = new THREE.Vector3(), P2 = new THREE.Vector3(), Pmid = new THREE.Vector3();
   const N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
-  const Ptip = new THREE.Vector3(), pt = new THREE.Vector3();
+  const Root = new THREE.Vector3(), Tip = new THREE.Vector3(), Ctrl = new THREE.Vector3();
+  const Cen = new THREE.Vector3(), Hh = new THREE.Vector3(), tmp = new THREE.Vector3();
 
-  for (let c = 0; c < nTufts; c++) {
-    const uTuft = (c + 0.5) / nTufts + (Math.random() - 0.5) * 0.1 / nTufts;
-    const tArc = Math.min(1, Math.max(0, uTuft));
-    const nasal = isRight ? tArc : (1.0 - tArc);           // 0 = nasal (inner)
-    const temporal = 1.0 - nasal;                          // 1 = temporal (outer)
-    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.5);// density envelope (thins at canthi)
-    const density = centre * (0.6 + 0.4 * temporal);
-    const nInTuft = Math.max(isUpper ? 2 : 1, Math.round((isUpper ? 2.2 : 1.5) + density * (isUpper ? 2.6 : 1.5)));
-    const tuftW = slot * (1.2 - CLUMP * 0.6);              // wisps overspill → continuous roots
+  for (let c = 0; c < nCards; c++) {
+    const tArc = (c + 0.5) / nCards;
+    const nasal = isRight ? tArc : (1.0 - tArc);
+    const temporal = 1.0 - nasal;
+    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.42);   // thins gently at the canthi
+    if (centre < 0.12) continue;
 
-    // ── Shared wisp geometry (computed once per cluster) ──
-    // Root frame at the cluster centre
     const tC = startFrac + tArc * arcSpan;
     const iC = Math.max(0, Math.min(segsU, Math.round(tC * segsU)));
     N.set(nrm.getX(iC), nrm.getY(iC), nrm.getZ(iC)).normalize();
     T.set(0, sign, 0);
     B.crossVectors(N, T).normalize();
-    // Cluster length: LONGEST at the temporal third (wing), shorter nasal. Only mildly
-    // thinned by the density envelope so the outer corner keeps its long lashes.
-    const lenProfile = lerp(0.6, 1.25, temporal) * (0.85 + 0.15 * centre);
-    const clusterLen = RR * (isUpper ? 0.27 : 0.14) * LENM * fLen * lenProfile * (0.72 + Math.random() * 0.4);
-    // Wisp tip direction, kept GENTLE so the fringe hugs the lid instead of spraying:
-    //   OUT (N, dominant) + a moderate UP-curl (T) + a SUBTLE lateral sweep toward the
-    //   temporal corner (B, a little stronger at the wing). Earlier values were ~3× too
-    //   large → near-horizontal streaks. Lateral must stay well under the up/out terms.
-    const upC = fCurl * (isUpper ? 1 : -1) * (0.85 - 0.22 * temporal) * (0.85 + Math.random() * 0.25);
-    const latC = fanDir * (0.05 + temporal * 0.34) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM);
-    const outC = 0.66;
-    // Cluster centre root point, then the shared converging tip
-    const cx = pos.getX(iC), cy = pos.getY(iC), cz = pos.getZ(iC);
-    Ptip.set(cx, cy, cz)
-      .addScaledVector(N, clusterLen * outC)
-      .addScaledVector(T, clusterLen * upC)
-      .addScaledVector(B, clusterLen * latC);
 
-    for (let k = 0; k < nInTuft; k++) {
-      const kf = nInTuft > 1 ? (k / (nInTuft - 1) - 0.5) : 0;
-      const t = tC + kf * tuftW + (Math.random() - 0.5) * tuftW * 0.3;
-      const tt = Math.min(endFrac, Math.max(startFrac, t));
-      const rowDepth = Math.pow(Math.random(), 1.7) * rowMaxDepth;
+    // length: longest at the temporal third; ragged per-card
+    const lenProfile = lerp(0.62, 1.22, temporal) * (0.82 + 0.18 * centre);
+    const H = RR * (isUpper ? 0.26 : 0.14) * LENM * fLen * lenProfile * (0.85 + Math.random() * 0.3);
+    // flow: rise as a fringe just off the margin — up-curl (T) leads, a forward lift
+    // (N) so it stands off the lid, a gentle temporal sweep (B) toward the wing
+    const upC = fCurl * (isUpper ? 1 : -1) * (0.72 - 0.18 * temporal);
+    const latC = fanDir * (0.05 + temporal * 0.3) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM);
+    const outC = 0.55;
 
-      const i = Math.max(0, Math.min(segsU, Math.round(tt * segsU)));
-      const i2 = Math.min(pos.count - 1, i + (segsU + 1));
-      P0.set(
-        pos.getX(i) + (pos.getX(i2) - pos.getX(i)) * rowDepth,
-        pos.getY(i) + (pos.getY(i2) - pos.getY(i)) * rowDepth,
-        pos.getZ(i) + (pos.getZ(i2) - pos.getZ(i)) * rowDepth,
+    const rx = pos.getX(iC), ry = pos.getY(iC), rz = pos.getZ(iC);
+    Root.set(rx, ry, rz);
+    Tip.copy(Root).addScaledVector(N, H * outC).addScaledVector(T, H * upC).addScaledVector(B, H * latC);
+    // control point bows OUTWARD from the chord → C-curl
+    Ctrl.copy(Root).add(Tip).multiplyScalar(0.5)
+      .addScaledVector(N, H * (0.14 + 0.16 * fCurl)).addScaledVector(T, H * 0.12 * sign);
+
+    // half-width of the card along the arc (world) — overlap neighbours for continuity
+    const iW = Math.max(0, Math.min(segsU, Math.round((tC + cardFrac * 0.5) * segsU)));
+    tmp.set(pos.getX(iW) - rx, pos.getY(iW) - ry, pos.getZ(iW) - rz);
+    const halfW = Math.max(RR * 0.03, tmp.length()) * 1.25 * (0.9 + Math.random() * 0.2);
+    const flipU = Math.random() < 0.5;          // mirror the texture for variety
+
+    const base = verts.length / 3;
+    for (let s = 0; s <= SEGV; s++) {
+      const v = s / SEGV;
+      const a = (1 - v) * (1 - v), b = 2 * (1 - v) * v, cc = v * v;
+      Cen.set(
+        a * Root.x + b * Ctrl.x + cc * Tip.x,
+        a * Root.y + b * Ctrl.y + cc * Tip.y,
+        a * Root.z + b * Ctrl.z + cc * Tip.z,
       );
-
-      // Per-lash length variation → ragged, feathered silhouette. Tip = a point along
-      // the root→sharedTip line, scaled by lenVar; fConv pulls the tip toward the SHARED
-      // tip (wisp) vs. leaving it above the lash's own root (comb). Feminine = wispier.
-      const lenVar = 0.66 + Math.pow(Math.random(), 1.5) * 0.7;
-      // "own tip" if the lash didn't converge (keeps its root's lateral offset)
-      const ownTipB = kf * tuftW * (1 - fConv);
-      P2.copy(Ptip).addScaledVector(B, ownTipB)
-        .addScaledVector(T, (Math.random() - 0.5) * clusterLen * 0.12);
-      // scale from root by lenVar (shorter lashes fall short of the shared tip)
-      P2.sub(P0).multiplyScalar(lenVar).add(P0);
-      if (P2.distanceTo(P0) < RR * 0.02) continue;
-
-      // Belly bows OUTWARD (+N) and up from the straight root→tip chord → real C-curve
-      Pmid.copy(P0).add(P2).multiplyScalar(0.5);
-      const bow = clusterLen * (0.12 + 0.16 * fCurl) * (0.7 + Math.random() * 0.6);
-      P1.copy(Pmid).addScaledVector(N, bow).addScaledVector(T, bow * 0.3 * sign);
-
-      // Thin filament, finer when feminine; near-constant width, fine point past 65%
-      const w0 = RR * 0.0036 * THK * fThin * (0.6 + Math.random() * 0.6);
-      const base = verts.length / 3;
-      const pl = Math.sqrt(N.x * N.x + N.z * N.z) || 1;
-      const px = -N.z / pl, pz = N.x / pl;
-      for (let sg = 0; sg <= SEG; sg++) {
-        const u = sg / SEG;
-        const a = (1 - u) * (1 - u), b2 = 2 * (1 - u) * u, cc = u * u;
-        pt.set(
-          a * P0.x + b2 * P1.x + cc * P2.x,
-          a * P0.y + b2 * P1.y + cc * P2.y,
-          a * P0.z + b2 * P1.z + cc * P2.z,
-        );
-        const taper = u < 0.65 ? (1.0 - 0.22 * u) : (1.0 - 0.22 * 0.65) * Math.max(0, (1 - u) / 0.35);
-        const w = w0 * taper + RR * 0.0001;
-        const cr = rootCol[0] + (tipCol[0] - rootCol[0]) * u;
-        const cg = rootCol[1] + (tipCol[1] - rootCol[1]) * u;
-        const cb = rootCol[2] + (tipCol[2] - rootCol[2]) * u;
-        verts.push(pt.x - px * w, pt.y, pt.z - pz * w); colors.push(cr, cg, cb);
-        verts.push(pt.x + px * w, pt.y, pt.z + pz * w); colors.push(cr, cg, cb);
-        if (sg > 0) {
-          const kk = base + (sg - 1) * 2;
-          indices.push(kk, kk + 1, kk + 2, kk + 1, kk + 3, kk + 2);
-        }
+      // horizontal axis of the card ≈ along the arc (B), narrowing slightly toward the tip
+      Hh.copy(B).multiplyScalar(halfW * (1.0 - 0.15 * v));
+      const uL = flipU ? 1 : 0, uR = flipU ? 0 : 1;
+      verts.push(Cen.x - Hh.x, Cen.y - Hh.y, Cen.z - Hh.z); uvs.push(uL, v);
+      verts.push(Cen.x + Hh.x, Cen.y + Hh.y, Cen.z + Hh.z); uvs.push(uR, v);
+      if (s > 0) {
+        const k = base + (s - 1) * 2;
+        indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
       }
     }
   }
@@ -759,7 +780,7 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const geo = new THREE.BufferGeometry();
   geo.setIndex(indices);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geo.setAttribute('color', new THREE.Float32BufferAttribute(colors, 3));
+  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
   geo.computeVertexNormals();
   return geo;
 }
@@ -1485,10 +1506,12 @@ class EyeRenderer {
       // Lashes — procedural triangle strips along lid edge
       const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);   // anatomical counts (90-160 / 75-80)
       const lashMat = new THREE.MeshBasicMaterial({
-        color: 0xffffff,          // V3.8: white so per-vertex root→tip colour shows through
-        vertexColors: true,
+        map: createLashTexture(),   // V3.9: alpha hair-card texture (fine hairs + soft tips)
+        color: 0xffffff,
+        transparent: true,
+        alphaTest: 0.04,            // low → keep soft anti-aliased hair edges (dark = no fuzz)
+        depthWrite: false,          // soft blended fringe, drawn after the eye (renderOrder)
         side: THREE.DoubleSide,
-        depthWrite: true,
         depthTest: true,
       });
       const lashMesh = new THREE.Mesh(lashGeo, lashMat);

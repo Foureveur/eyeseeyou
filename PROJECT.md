@@ -158,6 +158,23 @@
 
 ---
 
+### v3.8–v3.9 — Cils : hair-cards à texture alpha (2026-07-13)
+
+- v3.8 (modèle wisp géométrique) jugé « immonde » de face : rubans plats vus bout-à-bout
+  = crocs/duvet. Cause racine = rendu géométrique de face, pas la répartition.
+- **v3.9 = technique du métier : hair-cards alpha.** `createLashTexture()` dessine sur
+  un canvas une frange de poils fins, courbés, effilés (bande de racines sombre en bas,
+  pointes translucides en haut, dégradé racine→pointe quasi-noir→brun). `createLashGeometry`
+  pose des **rubans texturés courbés** (peu, larges, chevauchants) le long de la marge :
+  la texture porte la densité des poils, le ruban porte la courbure C + le flux directionnel.
+- Matériau : `map` + `transparent` + `alphaTest 0.04` + `depthWrite:false` → frange sombre
+  douce mélangée (pas de découpe dure ni de tri de transparence). Texture mise en cache.
+- Curseur **féminité** (`lashConfig.femininity`) + presets ♀/♂ dans le folder Lashes :
+  ♀ = long/courbé/dense/soyeux, ♂ = court/droit/clairsemé (ligne discrète). Distinction nette.
+- Limite assumée : la réf photo est de 3/4 profil (cils vus de côté = lush) ; nous sommes
+  de face → les hair-cards donnent la densité soyeuse là où la géométrie plate échouait.
+- `window.__eye` expose `lashConfig` pour le tuning console.
+
 ## Sprint suivant — Sprint 9 : pistes
 
 ### TODO réalisme visuel
