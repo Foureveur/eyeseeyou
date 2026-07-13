@@ -634,7 +634,7 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const nrm = outerGeo.getAttribute('normal');
   const verts = [];
   const indices = [];
-  const SEG = 5;
+  const SEG = 8;                               // curve segments — thin curved strands need more
   const startFrac = 0.285, endFrac = 0.715;   // lashes live on the frontal arc only
   const arcSpan = endFrac - startFrac;
   const sign = isUpper ? 1 : -1;
@@ -688,27 +688,36 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       );
       N.set(nrm.getX(i), nrm.getY(i), nrm.getZ(i)).normalize();
 
-      // Length: temporal flare (longest outer), tapering at both canthi. Amador ~1/3 width.
+      // Length: temporal flare (longest outer), tapering at the canthi. Amador ~1/3
+      // width. HEAVY per-lash variation (0.4..1.5×) so the silhouette is ragged and
+      // feathered, never a clean comb edge — real lashes differ wildly in length.
       const lenProfile = centre * lerp(0.82, 1.18, temporal);
-      const len = RR * (isUpper ? 0.34 : 0.21) * LENM * rowLenMul * lenProfile * (0.78 + Math.random() * 0.4);
+      const lenVar = 0.4 + Math.pow(Math.random(), 1.7) * 1.15;
+      const len = RR * (isUpper ? 0.30 : 0.15) * LENM * rowLenMul * lenProfile * lenVar;
       if (len < RR * 0.02) continue;
-      // Curl: strongest medial/central, lateral straighter (PMC review); jittered per lash
+      // Curl: strongest medial/central, lateral straighter (PMC review). Big per-lash
+      // spread so some hairs are near-straight and others strongly C-curled.
       const curlProfile = lerp(0.72, 1.12, nasal) * (0.86 + 0.24 * centre);
-      const curl = (0.58 + 0.30 * curlProfile + Math.random() * 0.16) * CURLM;
-      // Fan: only the TIPS splay (roots stay put). Kept small so tufts don't read as
-      // sharp separated triangles — a gentle regional lean + light per-lash scatter.
+      const curl = (isUpper ? 0.75 : 0.32) * (0.55 + 0.45 * curlProfile + Math.random() * 0.5) * CURLM;
+      // Fan: only the TIPS splay (roots stay put) — gentle regional lean + per-lash
+      // scatter so neighbouring hairs cross instead of marching in parallel.
       const fanDir = isRight ? -1 : 1;
-      const fan = fanDir * (temporal - 0.5) * 0.20 + kf * 0.14 + (Math.random() - 0.5) * (0.10 + CLUMP * 0.28);
+      const fan = fanDir * (temporal - 0.5) * 0.22 + kf * 0.12 + (Math.random() - 0.5) * (0.28 + CLUMP * 0.3);
 
       T.set(0, sign, 0);
       B.crossVectors(N, T).normalize();
 
-      // J-curl: dip forward off the margin, then sweep up (down for the lower lid)
-      const dip = isUpper ? 0.20 : 0.10;
-      P1.copy(P0).addScaledVector(N, len * 0.52).addScaledVector(T, -len * dip).addScaledVector(B, fan * len * 0.3);
-      P2.copy(P0).addScaledVector(N, len * 0.72).addScaledVector(T, len * curl).addScaledVector(B, fan * len);
+      // C-curve control points. The lash leaves the margin pointing outward, its belly
+      // lifts, and the tip sweeps up (down for the lower lid). Per-lash "lift" varies
+      // how upright vs. flat it sits — the main source of angular variety.
+      const dip = (isUpper ? 0.14 : 0.06) * (0.6 + Math.random() * 0.9);
+      const lift = 0.35 + Math.random() * 0.5;
+      P1.copy(P0).addScaledVector(N, len * 0.50).addScaledVector(T, len * (lift * 0.4 - dip)).addScaledVector(B, fan * len * 0.35);
+      P2.copy(P0).addScaledVector(N, len * 0.62).addScaledVector(T, len * curl).addScaledVector(B, fan * len);
 
-      const w0 = RR * 0.0108 * THK * (0.8 + Math.random() * 0.45);   // thick roots overlap → solid band
+      // Filament, not a wedge: THIN and near-constant width, tapering to a fine point
+      // only in the last third. Small w0 so a flat strip reads as a hair, not a fang.
+      const w0 = RR * 0.0036 * THK * (0.65 + Math.random() * 0.6);
       const base = verts.length / 3;
       const pl = Math.sqrt(N.x * N.x + N.z * N.z) || 1;
       const px = -N.z / pl, pz = N.x / pl;
@@ -720,7 +729,9 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
           a * P0.y + b2 * P1.y + cc * P2.y,
           a * P0.z + b2 * P1.z + cc * P2.z,
         );
-        const w = w0 * Math.pow(1 - u, 1.6) + RR * 0.0002;
+        // strand profile: ~constant along the shaft, fine point past 65%
+        const taper = u < 0.65 ? (1.0 - 0.25 * u) : (1.0 - 0.25 * 0.65) * Math.max(0, (1 - u) / 0.35);
+        const w = w0 * taper + RR * 0.00012;
         verts.push(pt.x - px * w, pt.y, pt.z - pz * w);
         verts.push(pt.x + px * w, pt.y, pt.z + pz * w);
         if (sg > 0) {
