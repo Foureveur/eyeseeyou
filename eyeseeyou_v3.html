@@ -3114,7 +3114,17 @@ class FaceTracker {
     const pinching = handConfig.reactions && thumbExt && dW(8) > dW(6) * 0.95
       && !ext(12, 10) && !ext(16, 14) && pinchGap < 1.1;
     hand.pinch = pinching ? Math.min(1, Math.max(0, (pinchGap - 0.15) / 0.85)) : null;
-    const pointingRaw = !pinching && ext(8, 6) && !ext(12, 10) && !ext(16, 14);
+    // V3.10: a finger pointed AT the camera (in front of the head) foreshortens — its
+    // 2D wrist→tip distance collapses, so the ext() test fails and the face used to win.
+    // Detect it in DEPTH instead: the index tip sits closer to the camera (smaller z)
+    // than its own knuckles → forward point. Accept 2D-extended OR forward-pointing,
+    // and reject only a clearly OPEN hand (both middle AND ring splayed), so a
+    // foreshortened index still counts.
+    const zf = (typeof lm[8].z === 'number');
+    const fwd = zf && lm[8].z < lm[6].z - 0.015 && lm[8].z < lm[5].z - 0.02;
+    // strict side-on point (index out, others curled) OR a forward point (foreshortened,
+    // caught by depth). fwd bypasses the others-curled test since they foreshorten too.
+    const pointingRaw = !pinching && ((ext(8, 6) && !ext(12, 10) && !ext(16, 14)) || fwd);
     // V3.6: hysteresis — the raw pose flickers at borderline finger angles; engage
     // after 2 consecutive ticks, release after 4, so the gaze doesn't flip
     // between fingertip and face several times a second.
