@@ -146,9 +146,9 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Lower Thick</label><input type="range" id="p-lidLowerThickness" min="0" max="2" step="0.05" value="0.45"><span class="v">0.45</span></div>
   <div class="pr"><label>Lower Ratio</label><input type="range" id="p-lidLowerRatio" min="0" max="1.0" step="0.01" value="0.40"><span class="v">0.60</span></div>
   <div class="pr"><label>Lower Bow ^^</label><input type="range" id="p-lidLowerBow" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
-  <div class="pr"><label>Corner Sharp</label><input type="range" id="p-lidCornerSharp" min="0.5" max="3" step="0.1" value="1.2"><span class="v">1.20</span></div>
+  <div class="pr"><label>Corner Sharp</label><input type="range" id="p-lidCornerSharp" min="0.5" max="3" step="0.05" value="0.95"><span class="v">0.95</span></div>
   <div class="pr"><label>Crease Depth</label><input type="range" id="p-lidCreaseDepth" min="0" max="1" step="0.05" value="0.4"><span class="v">0.40</span></div>
-  <div class="pr"><label>Lid Shadow</label><input type="range" id="p-lidShadow" min="0" max="1.0" step="0.02" value="0.30"><span class="v">0.30</span></div>
+  <div class="pr"><label>Lid Shadow</label><input type="range" id="p-lidShadow" min="0" max="1.0" step="0.02" value="0.5"><span class="v">0.50</span></div>
   <div class="pr"><label>Skin Color</label><input type="color" id="p-lidSkinColor" value="#c4956a"><span class="v"></span></div>
   <div class="pr"><label>Lower Color</label><input type="color" id="p-lidLowerColor" value="#c4956a"><span class="v"></span></div>
   <div class="pr"><label>Edge Color</label><input type="color" id="p-lidEdgeColor" value="#a56a60"><span class="v"></span></div>
@@ -189,6 +189,8 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Light Angle</label><input type="range" id="p-lightAngle" min="0" max="6.28" step="0.05" value="1.80"><span class="v">1.80</span></div>
   <div class="pr"><label>Light Height</label><input type="range" id="p-lightHeight" min="-1" max="3" step="0.05" value="1.50"><span class="v">1.50</span></div>
   <div class="pr"><label>Light Intensity</label><input type="range" id="p-lightIntensity" min="0" max="5" step="0.1" value="2.5"><span class="v">2.50</span></div>
+  <div class="pr"><label>Fill Light</label><input type="range" id="p-fillLight" min="0" max="2" step="0.05" value="0.6"><span class="v">0.60</span></div>
+  <div class="pr"><label>Back Light</label><input type="range" id="p-backLight" min="0" max="2" step="0.05" value="0"><span class="v">0.00</span></div>
 
   <h3>Reflection</h3>
   <div class="pr"><label>Source</label><select id="p-envSource" style="flex:1;background:#1a1a2e;color:#ccc;border:1px solid #333;border-radius:3px;padding:2px 4px;font-size:11px;"><option value="default">Default</option><option value="image">Image</option><option value="photo">Photo</option><option value="video">Live Video</option></select></div>
@@ -665,12 +667,15 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       // v4.12 left UVs/AO/roll in pole-space, which dilated every skin shading
       // zone (washed lids, margin roll ×2.5 too wide). Everything now reads vp —
       // exact pre-v4.12 look, full-pole coverage kept.
-      const vp = Math.min(1.2, v * profScale);
+      const vpFull = v * profScale;
+      const vp = Math.min(1.2, vpFull);
       uvs.push(u, Math.min(1, vp));
       const profMargin = Math.exp(-Math.pow(vp / 0.16, 2));
       const profHollow = -0.18 * Math.exp(-Math.pow((vp - 0.45) / 0.22, 2));
       const profFold = 0.30 * Math.exp(-Math.pow((vp - 0.86) / 0.18, 2));
-      vertParams.push({ u, v, vp: Math.min(1, vp), basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold });
+      // V4.14 (ref macro): brow-fat PAD — the puffy roll ABOVE the crease
+      const profPuff = 0.26 * Math.exp(-Math.pow((vpFull - 1.45) / 0.34, 2));
+      vertParams.push({ u, v, vp: Math.min(1, vp), basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold + profPuff });
     }
   }
 
@@ -872,8 +877,11 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     // forward off the margin; 1 = steeply lifted along the lid tangent.
     const pN = lerp(1.25, 0.55, PITCH);
     const pT = lerp(0.45, 1.45, PITCH);
+    // V4.14 (ref macro): the hair leaves the margin dipping slightly forward-DOWN
+    // before the J-curl lifts it — real implantation, natural criss-crossing
+    const rootDip = lerp(-0.20, 0.10, PITCH);
     Ctrl.copy(Root).addScaledVector(N, L * 0.62 * lerp(1.1, 0.8, PITCH))
-      .addScaledVector(T, L * 0.10 * curl * pT)
+      .addScaledVector(T, L * (rootDip + 0.10 * curl * pT))
       .addScaledVector(B, L * lat * 0.35);
     Tip.copy(Root)
       .addScaledVector(N, L * Math.max(0.22, 0.88 - 0.34 * curl) * pN)
@@ -1072,7 +1080,7 @@ uniform vec3 uIrisColorA, uIrisColorB, uIrisTint, uScleraTint;
 uniform float uTexMix, uLimbusDark, uVeins;
 uniform sampler2D tIris;
 uniform mat3 uLidRot;
-uniform float uLidUp, uLidLow, uMeniscus;
+uniform float uLidUp, uLidLow, uMeniscus, uLidShadowK;
 uniform vec2 uLightXY;
 uniform float uIrisRelief;
 float gEyeIrisMask = 0.0;
@@ -1246,6 +1254,14 @@ const EYE_GLSL_COLOR = /* glsl */`
   float occLow = 0.38 * smoothstep(0.45, -0.05, uLidLow - polarL);
   // warm shadow — occluded light on translucent tissue shifts red, not gray
   eyeCol *= mix(vec3(1.0), vec3(0.62, 0.45, 0.40), clamp(occUp + occLow, 0.0, 0.85));
+
+  // --- V4.14: REAL cast shadow from the upper lid — a crisp penumbra band right
+  //     under the margin (ref macro). The broad AO above reads as shading; this
+  //     band is what reads as "the lid occludes the light". Driven by the same
+  //     Lid Shadow slider as the mesh strip. ---
+  float dSh = polarL - uLidUp;
+  float castSh = smoothstep(0.26, 0.015, dSh) * smoothstep(-0.015, 0.02, dSh);
+  eyeCol *= mix(vec3(1.0), vec3(0.50, 0.37, 0.33), castSh * uLidShadowK);
 
   // --- tear meniscus — V4.5.1: NARROW. The old 0.10-rad falloff painted a wide
   //     misty white band above the lower lid ("ombre blanche"); a real meniscus
@@ -1590,12 +1606,13 @@ class EyeRenderer {
     this.keyLight = new THREE.DirectionalLight(0xfff8f0, 2.5);
     this.keyLight.position.set(2, 3, 4);
     this.scene.add(this.keyLight);
-    const fill = new THREE.DirectionalLight(0xd0e0ff, 0.6);
-    fill.position.set(-3, 1, 2);
-    this.scene.add(fill);
-    const back = new THREE.DirectionalLight(0xffffff, 0.5);
-    back.position.set(0, 1, -3);
-    this.scene.add(back);
+    // V4.14: fill + back exposed as sidebar sliders; back OFF by default
+    this.fillLight = new THREE.DirectionalLight(0xd0e0ff, 0.6);
+    this.fillLight.position.set(-3, 1, 2);
+    this.scene.add(this.fillLight);
+    this.backLight = new THREE.DirectionalLight(0xffffff, 0.0);
+    this.backLight.position.set(0, 1, -3);
+    this.scene.add(this.backLight);
   }
 
   // ============================================================
@@ -1651,6 +1668,7 @@ class EyeRenderer {
       uLidLow: { value: 2.10 },   // polar angle of lower lid edge
       uLightXY: { value: new THREE.Vector2(0.4, 0.8) },
       uMeniscus: { value: 0.5 },
+      uLidShadowK: { value: 0.5 },   // V4.14: cast-shadow band strength
     };
     mat.userData.eyeUniforms = u;
     mat.customProgramCacheKey = () => 'v3-eyeball';
@@ -1732,7 +1750,9 @@ class EyeRenderer {
     const lidR = Reye * 1.05;
     const segsU = LID_SEGS.u;
     const segsV = LID_SEGS.v;
-    const lidParams = { cornerSharp: 1.2, outerAngle: isRight ? -0.08 : 0.08, creaseDepth: 1.0 };
+    // V4.14: cornerSharp 1.2 → 0.95 — the ref macro shows rounded organic
+    // commissures, never pointed blades
+    const lidParams = { cornerSharp: 0.95, outerAngle: isRight ? -0.08 : 0.08, creaseDepth: 1.0 };
 
     if (!this._skinBumpTex) this._skinBumpTex = generateSkinBumpTexture();
 
@@ -2163,7 +2183,10 @@ class EyeRenderer {
   setLidClearcoat(v) { if (this._lidSkinMats) this._lidSkinMats.forEach(m => { m.clearcoat = v; }); }
 
   setLidShadowOpacity(val) {
-    if (this._lidShadowMats) this._lidShadowMats.forEach(m => { m.opacity = val; });
+    // V4.14: the slider drives BOTH the mesh strip (halved, it now shares the job)
+    // and the shader cast-shadow band
+    if (this._lidShadowMats) this._lidShadowMats.forEach(m => { m.opacity = val * 0.5; });
+    for (const u of this.eyeUniformSets) u.uLidShadowK.value = val;
   }
 
   setLidParam(key, val) {
@@ -2690,7 +2713,7 @@ class EyeController {
       lidOpen: 0.67, lidUpperTilt: -0.22, lidLowerTilt: -0.06, lidSlant: 0.01,
       lidWidth: 1.08, lidUpperThickness: 0.45, lidLowerThickness: 0.45, lidLowerRatio: 0.40,
       lidLowerBow: 0,   // V4.8: ^^ banana — lower margin bows upward, commissures pinned
-      lidCornerSharp: 1.2, lidCreaseDepth: 0.4, lidShadow: 0.30,
+      lidCornerSharp: 0.95, lidCreaseDepth: 0.4, lidShadow: 0.5,
       lashesShow: 1, skinTexture: 0.003,
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#a56a60',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
@@ -2701,6 +2724,7 @@ class EyeController {
       parallaxX: 0, parallaxY: -0.08, vergenceBase: 0.04, vergenceMax: 0.3,
       reflectionIntensity: 1.0,
       bgColor: '#050508', envLight: 1, lightAngle: 1.8, lightHeight: 1.5, lightIntensity: 2.5,
+      fillLight: 0.6, backLight: 0,   // V4.14: back light OFF by default
     };
     // Load saved defaults from localStorage
     try {
@@ -4230,6 +4254,8 @@ class DebugUI {
       case 'reflectionIntensity': r.setReflectionIntensity(val); break;
       case 'bgColor': r.setBgColor(val); break;
       case 'envLight': r.setEnvLight(!!val); break;
+      case 'fillLight': if (r.fillLight) r.fillLight.intensity = val; break;
+      case 'backLight': if (r.backLight) r.backLight.intensity = val; break;
       case 'pupilSize': case 'pupilCat': case 'pupilGoat': case 'pupilHeart':
       case 'pupilOval': case 'pupilReptile':
       case 'irisGrow': case 'irisShrink':
@@ -4336,6 +4362,9 @@ async function main() {
   renderer.setEnvIntensity(p.envIntensity);
   renderer.setBgColor(p.bgColor);
   renderer.setEnvLight(!!p.envLight);
+  if (renderer.fillLight) renderer.fillLight.intensity = p.fillLight;
+  if (renderer.backLight) renderer.backLight.intensity = p.backLight;
+  renderer.setLidShadowOpacity(p.lidShadow);
   renderer.setLid3d(!!p.lid3d);
   renderer.setLidSkinColor(p.lidSkinColor);
   renderer.setLidLowerColor(p.lidLowerColor);
