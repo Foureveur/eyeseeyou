@@ -152,6 +152,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Skin Color</label><input type="color" id="p-lidSkinColor" value="#c4956a"><span class="v"></span></div>
   <div class="pr"><label>Lower Color</label><input type="color" id="p-lidLowerColor" value="#c4956a"><span class="v"></span></div>
   <div class="pr"><label>Edge Color</label><input type="color" id="p-lidEdgeColor" value="#a56a60"><span class="v"></span></div>
+  <div class="pr"><label>Waterline</label><input type="range" id="p-lidEdgeShow" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
   <div class="pr"><label>Outer Angle</label><input type="range" id="p-lidOuterAngle" min="-0.3" max="0.3" step="0.01" value="0.08"><span class="v">0.08</span></div>
   <div class="pr"><label>Lid Roughness</label><input type="range" id="p-lidRoughness" min="0" max="1" step="0.01" value="0.65"><span class="v">0.65</span></div>
   <div class="pr"><label>Lid Sheen</label><input type="range" id="p-lidSheen" min="0" max="1" step="0.01" value="1.0"><span class="v">1.00</span></div>
@@ -2715,6 +2716,8 @@ class EyeController {
       lidLowerBow: 0,   // V4.8: ^^ banana — lower margin bows upward, commissures pinned
       lidCornerSharp: 0.95, lidCreaseDepth: 0.4, lidShadow: 0.5,
       lashesShow: 1, skinTexture: 0.003,
+      lidEdgeShow: 0,   // V4.15: waterline strips ("tranches") OFF by default — the
+                        // pink band hurt the scene; the dark crevice reads better
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#a56a60',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
       // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
@@ -4240,6 +4243,15 @@ class DebugUI {
       case 'lidSkinColor': r.setLidSkinColor(val); break;
       case 'lidLowerColor': r.setLidLowerColor(val); break;
       case 'lidEdgeColor': r.setLidEdgeColor(val); break;
+      case 'lidEdgeShow':
+        for (const eye of [r.left, r.right]) {
+          if (!eye) continue;
+          for (const name of ['upperLid', 'lowerLid']) {
+            const edge = eye.lidWrap?.getObjectByName(name)?.getObjectByName('edge');
+            if (edge) edge.visible = !!val;
+          }
+        }
+        break;
       case 'lidRoughness': r.setLidRoughness(val); break;
       case 'lidSheen': r.setLidSheen(val); break;
       case 'lidClearcoat': r.setLidClearcoat(val); break;
@@ -4365,6 +4377,14 @@ async function main() {
   if (renderer.fillLight) renderer.fillLight.intensity = p.fillLight;
   if (renderer.backLight) renderer.backLight.intensity = p.backLight;
   renderer.setLidShadowOpacity(p.lidShadow);
+  // V4.15: waterline strips ("tranches") hidden by default
+  for (const eye of [renderer.left, renderer.right]) {
+    if (!eye) continue;
+    for (const name of ['upperLid', 'lowerLid']) {
+      const edge = eye.lidWrap?.getObjectByName(name)?.getObjectByName('edge');
+      if (edge) edge.visible = !!p.lidEdgeShow;
+    }
+  }
   renderer.setLid3d(!!p.lid3d);
   renderer.setLidSkinColor(p.lidSkinColor);
   renderer.setLidLowerColor(p.lidLowerColor);
