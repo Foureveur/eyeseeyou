@@ -341,6 +341,33 @@ const weightConfig = {
   blinkBounce: 0.5,    // reopen overshoot amount
 };
 
+// V3.11 (Sprint A): fixational eye movements — an ALWAYS-ON additive layer.
+// Until now drift/microsaccades/tremor only ran when NO face was detected
+// (_updateMicro was the else-branch of tracking), so the eye was lifeless in
+// actual use. This layer rides on top of the gaze in EVERY mode:
+//   • OU drift — Ornstein-Uhlenbeck random walk (replaces deterministic sines)
+//   • corrective microsaccades — fire when drift error grows (or Poisson),
+//     aimed BACK toward the fixation point, main-sequence-ish kinematics
+//   • square-wave jerks — the away-and-back pair (~200ms), a signature of live eyes
+//   • post-saccadic glissade — small overshoot decaying ~85ms (visible weight)
+const femConfig = {
+  enabled: true,
+  driftAmp: 1.0,       // OU drift amplitude multiplier
+  microAmp: 1.0,       // microsaccade amplitude multiplier
+  trackingScale: 0.65, // attenuation while actively locked on a target
+  swjEvery: 35,        // mean seconds between square-wave jerks
+};
+
+// V3.11: pupil physiology — light reflex (webcam luminance) + hippus.
+const pupilPhysConfig = {
+  lightReflex: true,
+  hippus: true,
+  latencyMs: 250,      // photomotor latency
+  tauConstrict: 0.30,  // s — constriction is FAST
+  tauDilate: 2.5,      // s — dilation is SLOW (the asymmetry is the tell)
+  reflexGain: 0.5,     // luminance → pupil offset gain
+};
+
 // V3.4: hand tracking — a pointing finger outranks the face; the eye locks on the
 // fingertip of the hand CLOSEST to the camera and goes cross-eyed as it approaches
 // (targetZ is allowed past 1.0 → the convergence target moves right up to the eyes).
@@ -913,6 +940,7 @@ uniform float uLidUp, uLidLow, uMeniscus;
 uniform vec2 uLightXY;
 float gEyeIrisMask = 0.0;
 float gMeniscus = 0.0;
+float gWet = 1.0;
 ${EYE_GLSL_NOISE}
 `;
 
@@ -1014,6 +1042,11 @@ const EYE_GLSL_COLOR = /* glsl */`
   float mLow = smoothstep(0.10, 0.02, abs(uLidLow - polarL - 0.035));
   gMeniscus = (mUp * 0.5 + mLow) * uMeniscus;
 
+  // --- V3.11: tear-film zoning — the EXPOSED globe carries a glossy tear film,
+  //     the zones sliding under the lids are drier/matte. Uniform roughness was
+  //     the single cheapest materiality miss (TinyEye look = wet exposed dome). ---
+  gWet = smoothstep(-0.04, 0.18, polarL - uLidUp) * smoothstep(-0.04, 0.18, uLidLow - polarL);
+
   diffuseColor.rgb = eyeCol;
   gEyeIrisMask = win;
 }
@@ -1021,6 +1054,8 @@ const EYE_GLSL_COLOR = /* glsl */`
 
 const EYE_GLSL_ROUGH = /* glsl */`
 #include <roughnessmap_fragment>
+// V3.11: wet/dry zoning — exposed aperture = glossy tear film, under-lid = matte
+roughnessFactor = mix(min(roughnessFactor + 0.32, 1.0), roughnessFactor * 0.32, gWet);
 roughnessFactor = mix(roughnessFactor, uIrisRough, gEyeIrisMask);
 `;
 
@@ -1505,9 +1540,14 @@ class EyeRenderer {
 
       // Lashes — procedural triangle strips along lid edge
       const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);   // anatomical counts (90-160 / 75-80)
-      const lashMat = new THREE.MeshBasicMaterial({
+      // V3.11: LIT lash material — MeshBasic was unlit (paper-cutout black).
+      // Standard material picks up the key light + env → keratin sheen, modelling.
+      const lashMat = new THREE.MeshStandardMaterial({
         map: createLashTexture(),   // V3.9: alpha hair-card texture (fine hairs + soft tips)
         color: 0xffffff,
+        roughness: 0.45,
+        metalness: 0.0,
+        envMapIntensity: 0.7,
         transparent: true,
         alphaTest: 0.04,            // low → keep soft anti-aliased hair edges (dark = no fuzz)
         depthWrite: false,          // soft blended fringe, drawn after the eye (renderOrder)
@@ -2007,14 +2047,20 @@ class EyeRenderer {
     // V3: iris parallax hack removed — corneal refraction in the eye shader handles depth.
   }
 
+  // V3.11: upperAngle/lowerAngle accept either a number (both eyes) or {l, r}
+  // so desynced blinks reach the geometry per eye.
   updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops) {
-    // V3.1: lid aperture polar angles for the shader AO (center-line approximation)
-    const upPolar = Math.PI / 2 - (0.36 + upperAngle);
-    const lowPolar = Math.PI / 2 + (0.36 + lowerAngle);
-    for (const u of this.eyeUniformSets) { u.uLidUp.value = upPolar; u.uLidLow.value = lowPolar; }
+    const uaOf = (v, i) => (typeof v === 'object') ? (i === 0 ? v.l : (v.r ?? v.l)) : v;
     const eyes = cyclops ? [this.left] : [this.left, this.right];
     eyes.forEach((eye, i) => {
       if (!eye) return;
+      const ua = uaOf(upperAngle, i), la = uaOf(lowerAngle, i);
+      // V3.1: lid aperture polar angles for the shader AO (center-line approximation)
+      const u = this.eyeUniformSets[i];
+      if (u) {
+        u.uLidUp.value = Math.PI / 2 - (0.36 + ua);
+        u.uLidLow.value = Math.PI / 2 + (0.36 + la);
+      }
       const ul = eye.lidWrap.getObjectByName('upperLid');
       const ll = eye.lidWrap.getObjectByName('lowerLid');
       const slantSign = cyclops ? 0 : (i === 0 ? 1 : -1);
@@ -2023,8 +2069,8 @@ class EyeRenderer {
       const gazeDir = new THREE.Vector3(0, 0, 1);
       if (eye.pivot) gazeDir.set(0, 0, 1).applyQuaternion(eye.pivot.quaternion);
 
-      this._displaceAlmondLid(ul, upperAngle, true, width, upperThickness, gazeDir);
-      this._displaceAlmondLid(ll, lowerAngle, false, width, lowerThickness, gazeDir);
+      this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir);
+      this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir);
     });
   }
 
@@ -2202,8 +2248,8 @@ class EyelidController {
   }
   // baseTop / baseBot: desired openness ∈ [0..1] from emotion + user params
   // gazeY: -1..+1 (positive = looking up)
-  // blinkAmount: 0..1 (0 = no blink, 1 = fully closed)
-  update(dt, baseTop, baseBot, gazeY, blinkAmount) {
+  // blinkL / blinkR: 0..1 per eye (V3.11 — real lids never blink perfectly in phase)
+  update(dt, baseTop, baseBot, gazeY, blinkL, blinkR = blinkL) {
     // --- Gaze coupling (Tâche 3) ---
     // V2.8: tunable coefs (was hardcoded EyeMech 0.8/0.4 — too strong, made the
     // lids appear to be doing all the vertical tracking while the iris's smaller
@@ -2214,25 +2260,27 @@ class EyelidController {
 
     // --- Blink overlay ---
     // Multiplicative — guarantees blink timing independent of spring physics
-    const blinkMul = 1 - blinkAmount;
+    const mulL = 1 - blinkL, mulR = 1 - blinkR;
 
-    const tTop = THREE.MathUtils.clamp((baseTop + topOffset) * blinkMul, 0, 1);
-    const tBot = THREE.MathUtils.clamp((baseBot + botOffset) * blinkMul, 0, 1);
-
-    // Apply targets, update physics. L and R share the same target for now (symmetric).
-    // Future: asymmetric blink / expression could drive topL ≠ topR.
     for (const s of [this.topL, this.topR, this.botL, this.botR]) {
       s.updateFromState(state);
     }
-    this.topL.target = tTop; this.topR.target = tTop;
-    this.botL.target = tBot; this.botR.target = tBot;
+    this.topL.target = THREE.MathUtils.clamp((baseTop + topOffset) * mulL, 0, 1);
+    this.topR.target = THREE.MathUtils.clamp((baseTop + topOffset) * mulR, 0, 1);
+    this.botL.target = THREE.MathUtils.clamp((baseBot + botOffset) * mulL, 0, 1);
+    this.botR.target = THREE.MathUtils.clamp((baseBot + botOffset) * mulR, 0, 1);
     for (const s of [this.topL, this.topR, this.botL, this.botR]) {
       s.update(dt);
     }
   }
-  // Unified outputs (average of L/R for symmetric render paths)
+  // Unified outputs (average of L/R — kept for HUD/compat)
   getTopOpenness() { return (this.topL.position + this.topR.position) * 0.5; }
   getBotOpenness() { return (this.botL.position + this.botR.position) * 0.5; }
+  // V3.11: per-eye outputs for the desynced render path
+  getTopOpennessL() { return this.topL.position; }
+  getTopOpennessR() { return this.topR.position; }
+  getBotOpennessL() { return this.botL.position; }
+  getBotOpennessR() { return this.botR.position; }
   // Future-use: servo angles for EyeMech Epsilon physical eyes
   getServoAngles() {
     return {
@@ -2330,6 +2378,21 @@ class EyeController {
     this._tremor = new OcularTremor();
     // V2.1: pupil accommodation — constricts briefly on saccade, dilates with depth proximity
     this._pupilFocus = { offset: 0, constrictionTimer: 0, targetOffset: 0 };
+    // V3.11: always-on fixational layer (OU drift + corrective microsaccades + SWJ + glissade + tremor)
+    this._fem = {
+      x: 0, y: 0, vx: 0, vy: 0, tx: 0, ty: 0,
+      ms: { active: false, t: 0, dur: 0, fromX: 0, fromY: 0, dx: 0, dy: 0 },
+      nextMsIn: 0.8, swjIn: 20 + Math.random() * 30, swjReturn: null,
+      glisX: 0, glisY: 0,
+    };
+    // V3.11: facial scan-path — fixate one feature of the viewer's face at a time
+    this._scan = { at: 'eyeL', t: 0 };
+    // V3.11: pupil physiology — light reflex (delayed, asymmetric) + hippus + post-blink
+    this._pupilPhys = {
+      light: 0, lumDelayed: 0.45, queue: [],
+      hippusA: Math.random() * 7, hippusB: Math.random() * 7,
+      postBlink: 0,
+    };
     this._scheduleBlink();
   }
 
@@ -2454,6 +2517,13 @@ class EyeController {
   // per-eye convergence in the render loop; >1 means the finger is at the lens.
   getGazeDepth() { return this._gaze.currentZ; }
 
+  // V3.11: webcam luminance sample (0..1), queued for the 250ms photomotor latency
+  notifyAmbientLight(l) {
+    const q = this._pupilPhys.queue;
+    q.push({ t: performance.now(), l });
+    if (q.length > 12) q.shift();
+  }
+
   // V2.1: called by _updateMicro when a saccade fires
   _triggerPupilConstriction() {
     this._pupilFocus.constrictionTimer = 0.28;   // ~280ms constriction event
@@ -2513,6 +2583,13 @@ class EyeController {
       // V2.3: double-blink probability from config
       this._blink.doubleQueued = allowDouble && Math.random() < blinkConfig.doubleProbability;
       this._blink.lastBlinkTime = this._micro.timer;
+      // V3.11: ~18% of spontaneous blinks are PARTIAL (lids drop 45–75%, not full
+      // closure) — reflex/forced blinks always complete.
+      this._blink.amplitude = (allowDouble && !force && Math.random() < 0.18)
+        ? 0.45 + Math.random() * 0.3 : 1.0;
+      // V3.11: L/R desync — real lids never blink perfectly in phase (5–15ms lag,
+      // random side). Stored as a progress offset for the lagging eye.
+      this._blink.lagR = (Math.random() < 0.5 ? -1 : 1) * (0.005 + Math.random() * 0.010);
     }
   }
 
@@ -2559,6 +2636,7 @@ class EyeController {
     this._freeze += (this._freezeTarget - this._freeze) * Math.min(1, dt * 5);
 
     this._updateGazeMode(dt);
+    this._updateFixational(dt);   // V3.11: ALWAYS-ON — the fix for the lifeless tracked gaze
     const g = this._gaze;
 
     // Smooth pursuit vs saccade: compute target velocity
@@ -2641,8 +2719,9 @@ class EyeController {
     const droop = this._lidDroop * weightConfig.lidDroop * 0.16;
     const baseTop = Math.max(0.04, lidOpenEff - droop);
     const baseBot = lidOpenEff * this._pulsed('lidLowerRatio', p.lidLowerRatio);
-    const blinkAmount = this.getBlinkAmount();
-    this.eyelidController.update(dt, baseTop, baseBot, g.currentY, blinkAmount);
+    // V3.11: per-eye blink amounts (L/R desync) feed the four springs separately
+    this.eyelidController.update(dt, baseTop, baseBot, g.currentY,
+      this.getBlinkAmount(), this.getBlinkAmountR());
 
     // V2.4: pupil accommodation — "mise au point" + heartbeat pulse, all parametric.
     const pf = this._pupilFocus;
@@ -2694,13 +2773,38 @@ class EyeController {
         pulse = (s1 + s2) * heartbeat.pulseStrength;
       }
     }
+    // V3.11: pupil physiology — light reflex + hippus + post-blink redilation.
+    // The asymmetry (fast constriction ~0.3s, SLOW dilation ~2.5s) is the single
+    // most recognizable behavior of a real pupil.
+    const PP = this._pupilPhys;
+    const nowMs = performance.now();
+    while (PP.queue.length && nowMs - PP.queue[0].t > pupilPhysConfig.latencyMs) {
+      PP.lumDelayed = PP.queue.shift().l;
+    }
+    let physOffset = 0;
+    if (pupilPhysConfig.lightReflex) {
+      const lightTarget = -(PP.lumDelayed - 0.45) * pupilPhysConfig.reflexGain;  // bright → constrict
+      const tau = lightTarget < PP.light ? pupilPhysConfig.tauConstrict : pupilPhysConfig.tauDilate;
+      PP.light += (lightTarget - PP.light) * Math.min(1, dt / tau);
+      physOffset += PP.light;
+    }
+    if (pupilPhysConfig.hippus) {
+      // hippus — the pupil is NEVER still; slow unrest, larger in the dark
+      PP.hippusA += dt * 0.55;
+      PP.hippusB += dt * 1.13;
+      const hAmp = (0.012 + 0.020 * (1 - PP.lumDelayed)) * (1 - this._freeze * 0.7);
+      physOffset += (Math.sin(PP.hippusA) * 0.6 + Math.sin(PP.hippusB + 1.7) * 0.4) * hAmp;
+    }
+    PP.postBlink *= Math.exp(-dt / 0.8);
+    physOffset += PP.postBlink;
+
     // V3.5: + emotion pulse (EMOTIONS[name].pupilSize blended over the current size)
     // + 🤏 pinch = direct pupil control (thumb-index gap maps to pupil size)
     let pinchOffset = 0;
     if (handConfig.reactions && this.hand.detected && this.hand.pinch !== null) {
       pinchOffset = lerp(0.07, 0.80, this.hand.pinch) - p.pupilSize;
     }
-    pf.targetOffset = saccadeConstrict + depthOffset + pulse + (this._smileLevel || 0) * 0.08
+    pf.targetOffset = saccadeConstrict + depthOffset + pulse + physOffset + (this._smileLevel || 0) * 0.08
       + (this._pulsed('pupilSize', p.pupilSize) - p.pupilSize) + pinchOffset;
     pf.offset += (pf.targetOffset - pf.offset) * Math.min(1, dt * pupilFocusConfig.responseSpeed);
   }
@@ -2709,14 +2813,24 @@ class EyeController {
     const g = this._gaze;
     // V3.7: render rides the inertial mass (weight), not the raw smoothed target
     const useInertia = weightConfig.enabled && weightConfig.gaze > 0.001 && this._freeze < 0.5;
-    const gx = useInertia ? this._inertia.x : g.currentX;
-    const gy = useInertia ? this._inertia.y : g.currentY;
+    let gx = useInertia ? this._inertia.x : g.currentX;
+    let gy = useInertia ? this._inertia.y : g.currentY;
+    // V3.11: fixational layer rides on top of EVERYTHING — attenuated (not muted)
+    // while actively locked on a target, full amplitude when idle.
+    const F = this._fem;
+    const engaged = this.face.detected || (this.hand.detected && this.hand.pointing);
+    const k = engaged ? femConfig.trackingScale : 1.0;
+    gx += (F.x + F.glisX + F.tx) * k;
+    gy += (F.y + F.glisY + F.ty) * k;
+    // V3.11: blink-associated eye movement — the globes dip ~2° during lid closure
+    gy -= this.getBlinkAmount() * 0.05;
     return { x: Math.max(-1, Math.min(1, gx)), y: Math.max(-1, Math.min(1, gy)), vergence: g.vergence };
   }
 
-  getBlinkAmount() {
-    if (!this._blink.active) return 0;
-    const t = this._blink.progress;
+  // V3.11: shared blink kinematics curve (t ∈ 0..1) — extracted so each eye can
+  // sample it at its own (desynced) phase.
+  _blinkCurve(t) {
+    if (t <= 0 || t >= 1) return 0;
     // V3.7: gravity-assisted asymmetry — close FAST (22%, the lid falls under gravity
     // + orbicularis), reopen SLOWER (78%, levator lifting mass) with a small overshoot
     // past open near the end so the lid springs settle back down (reads as weight).
@@ -2730,6 +2844,19 @@ class EyeController {
     // overshoot dip: brief negative around o≈0.8 → lid opens a hair past rest, then settles
     const bounce = weightConfig.enabled ? -Math.sin(o * Math.PI) * o * weightConfig.blinkBounce * 0.06 : 0;
     return base + bounce;
+  }
+
+  getBlinkAmount() {
+    if (!this._blink.active) return 0;
+    return this._blinkCurve(this._blink.progress) * (this._blink.amplitude ?? 1);
+  }
+
+  // V3.11: right eye samples the curve at a lagged phase (lagR seconds × speed)
+  getBlinkAmountR() {
+    if (!this._blink.active) return 0;
+    const lag = (this._blink.lagR ?? 0) * this._blink.speed;
+    return this._blinkCurve(Math.max(0, Math.min(1, this._blink.progress - lag)))
+      * (this._blink.amplitude ?? 1);
   }
 
   // Reactive blink — call when gaze target changes suddenly
@@ -2773,7 +2900,24 @@ class EyeController {
       return;
     }
     if (this._gazeMode === 'continuous') {
-      if (f.detected) { g.targetX = f.x; g.targetY = f.y; g.targetZ = f.z; } else this._updateMicro(dt);
+      if (f.detected) {
+        // V3.11: facial scan-path — a human never tracks the midpoint of your face.
+        // It fixates one eye, saccades to the other, occasionally drops to the mouth
+        // (the classic eyes-mouth triangle). Dwell 0.4–2.5s, alertness shortens it.
+        const sc = this._scan;
+        sc.t -= dt;
+        if (sc.t <= 0 || !f.features?.[sc.at]) {
+          const r = Math.random();
+          const next = r < 0.42 ? 'eyeL' : r < 0.84 ? 'eyeR' : 'mouth';
+          sc.at = (next === sc.at && next !== 'mouth') ? (next === 'eyeL' ? 'eyeR' : 'eyeL') : next;
+          sc.t = (sc.at === 'mouth' ? 0.35 + Math.random() * 0.8 : 0.5 + Math.random() * 2.0)
+            * lerp(1.3, 0.6, this.getEffState().alertness);
+        }
+        const ft = f.features?.[sc.at];
+        g.targetX = ft ? ft.x : f.x;
+        g.targetY = ft ? ft.y : f.y;
+        g.targetZ = f.z;
+      } else this._updateMicro(dt);
     } else if (this._gazeMode === 'motion') {
       if (f.detected) {
         const d = Math.abs(f.x - this._motion.lastX) + Math.abs(f.y - this._motion.lastY);
@@ -2796,76 +2940,107 @@ class EyeController {
     }
   }
 
+  // V3.11 (Sprint A): fixational layer — runs EVERY frame in EVERY gaze mode,
+  // additive on top of the tracked target. This is where the "alive" lives.
+  _updateFixational(dt) {
+    const F = this._fem;
+    const st = this.getEffState();
+    const frz = 1 - this._freeze;
+    if (!femConfig.enabled || frz <= 0.02) {
+      F.x *= 0.92; F.y *= 0.92; F.glisX *= 0.9; F.glisY *= 0.9; F.tx = 0; F.ty = 0;
+      return;
+    }
+    const cdt = Math.min(dt, 0.05);
+    // --- OU drift: mean-reverting random walk (real drift is Brownian-like, never sinusoidal)
+    if (vitalsEnabled.drift) {
+      const sigma = 0.16 * femConfig.driftAmp * lerp(0.7, 1.9, st.fatigue) * frz;
+      const theta = 4.5;
+      const rnd = () => (Math.random() + Math.random() + Math.random() - 1.5); // ~gaussian
+      F.vx += -theta * F.vx * cdt + sigma * Math.sqrt(cdt) * rnd();
+      F.vy += -theta * F.vy * cdt + sigma * Math.sqrt(cdt) * rnd() * 0.75;
+      F.x += F.vx * cdt - F.x * 0.5 * cdt;   // weak recentering
+      F.y += F.vy * cdt - F.y * 0.5 * cdt;
+    } else { F.x *= 0.98; F.y *= 0.98; }
+    // --- corrective microsaccades: snap BACK toward fixation when drift error grows
+    const ms = F.ms;
+    if (vitalsEnabled.microsaccades) {
+      F.nextMsIn -= dt;
+      F.swjIn -= dt;
+      const err = Math.hypot(F.x, F.y);
+      if (!ms.active && (err > 0.022 || F.nextMsIn <= 0)) {
+        ms.active = true; ms.t = 0;
+        ms.dur = 0.018 + Math.random() * 0.012 + err * 0.25;  // main sequence: bigger = longer
+        ms.fromX = F.x; ms.fromY = F.y;
+        const over = 0.85 + Math.random() * 0.35;             // over/undershoot noise
+        ms.dx = -F.x * over + (Math.random() - 0.5) * 0.006;
+        ms.dy = -F.y * over * 0.7 + (Math.random() - 0.5) * 0.004;
+        F.nextMsIn = (0.4 + Math.random() * Math.random() * 1.8)
+          * lerp(1.25, 0.45, st.tension) * lerp(1.2, 0.6, st.alertness);
+        this._triggerPupilConstriction();
+      }
+      // square-wave jerk: deliberate away-excursion; the return leg fires as a
+      // corrective saccade ~200ms later (err spikes → immediate trigger)
+      if (!ms.active && F.swjIn <= 0) {
+        ms.active = true; ms.t = 0; ms.dur = 0.02 + Math.random() * 0.01;
+        ms.fromX = F.x; ms.fromY = F.y;
+        const amp = 0.012 + Math.random() * 0.010;
+        const horiz = Math.random() < 0.8;                    // strong horizontal bias
+        ms.dx = horiz ? (Math.random() < 0.5 ? -1 : 1) * amp : (Math.random() - 0.5) * amp * 0.3;
+        ms.dy = horiz ? (Math.random() - 0.5) * amp * 0.3 : (Math.random() < 0.5 ? -1 : 1) * amp * 0.7;
+        F.swjReturn = 0.16 + Math.random() * 0.10;
+        F.swjIn = femConfig.swjEvery * (0.5 + Math.random());
+      }
+      if (F.swjReturn != null && !ms.active) {
+        F.swjReturn -= dt;
+        if (F.swjReturn <= 0) { F.swjReturn = null; F.nextMsIn = 0; }
+      }
+      if (ms.active) {
+        ms.t += dt;
+        const p = Math.min(1, ms.t / ms.dur);
+        const s = p * p * (3 - 2 * p);
+        F.x = ms.fromX + ms.dx * s * femConfig.microAmp * frz;
+        F.y = ms.fromY + ms.dy * s * femConfig.microAmp * frz;
+        if (p >= 1) {
+          ms.active = false;
+          // post-saccadic glissade: inject a small overshoot that settles ~85ms
+          F.glisX += ms.dx * 0.07 * femConfig.microAmp;
+          F.glisY += ms.dy * 0.07 * femConfig.microAmp;
+        }
+      }
+    }
+    const gk = Math.exp(-dt / 0.085);
+    F.glisX *= gk; F.glisY *= gk;
+    // --- tremor: high-frequency shimmer (kept from V2, now additive here)
+    if (vitalsEnabled.tremor && this._tremor) {
+      const tr = this._tremor.sample(st);
+      F.tx = tr.x * frz; F.ty = tr.y * frz;
+    } else { F.tx = 0; F.ty = 0; }
+  }
+
   _updateMicro(dt) {
+    // V3.11: idle behavior when nothing is tracked = LOOK-AROUND fixations
+    // (pick a point, dwell, saccade to the next — like scanning a room).
+    // The micro-life (drift/microsaccades/tremor) now lives in _updateFixational,
+    // which runs in every mode — no more duplication here.
     const m = this._micro;
     m.timer += dt;
     const g = this._gaze;
-
-    // V3.5: vitals read the pulse-blended state; ✋ freeze damps everything to stillness
     const st = this.getEffState();
     const frz = 1 - this._freeze;
-
-    // --- Slow inter-saccadic drift (V2: modulated by state.fatigue) ---
-    // Fatigue increases drift amplitude (eyes wander more when tired)
-    const driftAmp = lerp(1.0, 3.5, st.fatigue) * frz;   // V2.1: boosted for visibility
-    const t = m.timer;
-    if (vitalsEnabled.drift) {
-      m.driftX += (Math.sin(t * 0.7) * 0.02 * driftAmp + Math.sin(t * 2.3) * 0.008 * driftAmp - m.driftX) * 0.02;
-      m.driftY += (Math.cos(t * 0.5) * 0.015 * driftAmp + Math.cos(t * 1.9) * 0.006 * driftAmp - m.driftY) * 0.02;
-    } else {
-      m.driftX *= 0.9; m.driftY *= 0.9;
+    m.nextSaccadeIn -= dt;
+    if (m.nextSaccadeIn <= 0) {
+      const wide = Math.random() < 0.18;                     // occasional wide glance
+      const r = (wide ? 0.35 + Math.random() * 0.40 : 0.05 + Math.random() * 0.22)
+        * lerp(0.7, 1.5, st.curiosity) * frz;
+      const a = Math.random() * Math.PI * 2;
+      m.driftX = Math.cos(a) * r;
+      m.driftY = Math.sin(a) * r * 0.6;                      // vertical glances are smaller
+      const dwell = lerp(1.4, 0.6, st.alertness) + Math.random() * lerp(3.0, 1.2, st.curiosity);
+      m.nextSaccadeIn = dwell;
+      this._triggerPupilConstriction();
     }
-
-    // --- Saccade scheduling (V2: interval modulated by state.tension) ---
-    if (vitalsEnabled.microsaccades && !m.saccadeActive) {
-      m.nextSaccadeIn -= dt;
-      if (m.nextSaccadeIn <= 0) {
-        m.saccadeActive = true;
-        m.saccadeElapsed = 0;
-        this._triggerPupilConstriction();  // V2.1: mise au point — pupil constricts on saccade
-        m.saccadeDur = 0.025 + Math.random() * 0.03;  // 25-55ms human microsaccade
-        // V2.3: Tension AND curiosity boost amplitude — curious eyes look around more
-        const ampBoost = lerp(1.0, 1.3, st.tension) * lerp(1.0, 1.8, st.curiosity);
-        const amp = (0.01 + Math.random() * 0.07) * ampBoost * frz;
-        const angle = Math.random() * Math.PI * 2;
-        m.saccadeDX = Math.cos(angle) * amp;
-        m.saccadeDY = Math.sin(angle) * amp;
-        m.saccadeFromX = g.targetX;
-        m.saccadeFromY = g.targetY;
-        // V2: tension + curiosity shorten interval — tense or curious = twitchy gaze
-        // V2.3: curiosity now wired (was unused) → more frequent saccades + bigger amplitude
-        const intervalScale = lerp(1.2, 0.4, st.tension) * lerp(1.3, 0.5, st.curiosity);
-        m.nextSaccadeIn = (0.2 + Math.random() * Math.random() * 2.0) * intervalScale;
-      }
-      g.targetX = m.driftX;
-      g.targetY = m.driftY;
-    } else if (!m.saccadeActive) {
-      g.targetX = m.driftX;
-      g.targetY = m.driftY;
-    }
-
-    // --- Active saccade: fast ballistic movement ---
-    if (m.saccadeActive) {
-      m.saccadeElapsed += dt;
-      let p = Math.min(1, m.saccadeElapsed / m.saccadeDur);
-      p = 0.5 - 0.5 * Math.cos(p * Math.PI);  // smooth ease-in-out
-      g.targetX = m.saccadeFromX + m.saccadeDX * p;
-      g.targetY = m.saccadeFromY + m.saccadeDY * p;
-      if (m.saccadeElapsed >= m.saccadeDur) {
-        m.saccadeActive = false;
-        m.driftX = g.targetX;
-        m.driftY = g.targetY;
-      }
-    }
-
-    // V2: Ocular tremor — additive layer on top of drift/saccades
-    // V3.5: pulse-blended state + freeze damping
-    if (vitalsEnabled.tremor && this._tremor) {
-      const t = this._tremor.sample(st);
-      g.targetX += t.x * frz;
-      g.targetY += t.y * frz;
-    }
-
+    g.targetX = m.driftX;
+    g.targetY = m.driftY;
     g.targetZ = 0.5;
   }
 
@@ -2875,6 +3050,8 @@ class EyeController {
     if (this._blink.progress >= 1) {
       this._blink.active = false;
       this._blink.progress = 0;
+      // V3.11: post-blink micro-redilation — the pupil relaxes ~2% after each blink
+      this._pupilPhys.postBlink = 0.02 * (this._blink.amplitude ?? 1);
       // Double blink: fire again immediately with faster speed
       if (this._blink.doubleQueued) {
         this._blink.doubleQueued = false;
@@ -3001,6 +3178,23 @@ class FaceTracker {
     let res = null;
     try { res = this.landmarker.detectForVideo(this.video, now); } catch (e) { /* transient decode errors */ }
     const p = this.controller.params;
+    // V3.11: ambient luminance for the pupillary light reflex — mean of an 8×8
+    // downsample of the webcam frame, every ~8th tick (≈4 Hz). Shine a light at
+    // the camera → miosis; darken the room → mydriasis.
+    if ((this._lumTick = (this._lumTick || 0) + 1) % 8 === 0) {
+      try {
+        if (!this._lumCv) {
+          this._lumCv = document.createElement('canvas');
+          this._lumCv.width = this._lumCv.height = 8;
+          this._lumCtx = this._lumCv.getContext('2d', { willReadFrequently: true });
+        }
+        this._lumCtx.drawImage(this.video, 0, 0, 8, 8);
+        const d = this._lumCtx.getImageData(0, 0, 8, 8).data;
+        let s = 0;
+        for (let i = 0; i < d.length; i += 4) s += d[i] * 0.30 + d[i + 1] * 0.59 + d[i + 2] * 0.11;
+        this.controller.notifyAmbientLight(s / (64 * 255));
+      } catch (e) { /* canvas/decode hiccup — skip this sample */ }
+    }
     // V3.4: hands — every 2nd tick (~15 Hz desktop), enough for fingertip + gestures
     if (this.hands && handConfig.enabled && (++this._handTick & 1) === 0) {
       let hres = null;
@@ -3028,6 +3222,15 @@ class FaceTracker {
       this.controller.face.x = -(cx * 2 - 1) * p.sensitivity + p.parallaxX;
       this.controller.face.y = -(cy * 2 - 1) * p.sensitivity + p.parallaxY;
       this.controller.face.z = Math.min(1.0, iod * 6.5);
+      // V3.11: scan-path features — viewer's eyes + mouth, in gaze-target coords
+      // (same transform as face.x/y). lm[473]=left iris, lm[468]=right iris, lm[13]=upper lip.
+      const _fx = v => -(v.x * 2 - 1) * p.sensitivity + p.parallaxX;
+      const _fy = v => -(v.y * 2 - 1) * p.sensitivity + p.parallaxY;
+      this.controller.face.features = {
+        eyeL: { x: _fx(il), y: _fy(il) },
+        eyeR: { x: _fx(ir), y: _fy(ir) },
+        mouth: { x: _fx(lm[13]), y: _fy(lm[13]) },
+      };
       // V3.5: 🫣 peek-a-boo — face reappears after a 0.5–5 s gap during which a
       // hand filled the frame (camera covered) → surprise!
       if (!this.controller.face.detected && this._peek.faceLostAt) {
@@ -3620,7 +3823,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -3752,6 +3955,11 @@ async function main() {
   gVitals.add(vitalsEnabled, 'microsaccades').name('microsaccades');
   gVitals.add(vitalsEnabled, 'tremor').name('tremor');
   gVitals.add(vitalsEnabled, 'blinks').name('blinks');
+  // V3.11: fixational layer tuning (always-on additive micro-life)
+  gVitals.add(femConfig, 'enabled').name('fixational layer (v3.11)');
+  gVitals.add(femConfig, 'driftAmp', 0, 3, 0.05).name('drift amplitude');
+  gVitals.add(femConfig, 'microAmp', 0, 3, 0.05).name('microsaccade amp');
+  gVitals.add(femConfig, 'trackingScale', 0, 1, 0.05).name('amp while tracking');
   gVitals.close();  // start collapsed
 
   // V2.3: fine blink controls
@@ -3810,6 +4018,10 @@ async function main() {
   gPupil.add(pupilFocusConfig, 'saccadeConstriction', 0, 0.8, 0.01).name('saccade constrict');
   gPupil.add(pupilFocusConfig, 'depthAccommodationRange', 0, 0.4, 0.01).name('depth accommodation');
   gPupil.add(pupilFocusConfig, 'responseSpeed', 1, 30, 0.5).name('response speed');
+  // V3.11: pupil physiology — light reflex + hippus
+  gPupil.add(pupilPhysConfig, 'lightReflex').name('light reflex (webcam)');
+  gPupil.add(pupilPhysConfig, 'reflexGain', 0, 1.5, 0.05).name('reflex gain');
+  gPupil.add(pupilPhysConfig, 'hippus').name('hippus (unrest)');
   gPupil.close();
 
   // V2.4+V2.5: heartbeat mode — coupled with tension + frequency/irregularity/double pulse
@@ -3881,15 +4093,21 @@ async function main() {
     renderer.setGaze(gaze.x, gaze.y, gaze.vergence, p.globeRotate, cyclops, controller.getGazeDepth(), convergenceEnabled.enabled);
 
     // V2: use spring-based openness from EyelidController instead of raw p.lidOpen * (1-ba)
-    const topOpenness = controller.eyelidController.getTopOpenness();
-    const botOpenness = controller.eyelidController.getBotOpenness();
+    // V3.11: per-eye openness — L/R blink desync reaches the geometry
+    const ec = controller.eyelidController;
     // V3: 0.7 → 0.52 — at full procedural scale (skinScale 1.0) the V2 factor
     // over-opened the aperture and the eyes read as bulging.
     // V3.5: lid geometry passes through the emotion pulse (tilts/slant/width follow
     // the EMOTIONS table during gesture reactions, not just the emoji buttons)
     const lidP = controller.getLidParams();
-    const upperAng = topOpenness * 0.52 + lidP.upperTilt;
-    const lowerAng = botOpenness * 0.52 + lidP.lowerTilt;
+    const upperAng = {
+      l: ec.getTopOpennessL() * 0.52 + lidP.upperTilt,
+      r: ec.getTopOpennessR() * 0.52 + lidP.upperTilt,
+    };
+    const lowerAng = {
+      l: ec.getBotOpennessL() * 0.52 + lidP.lowerTilt,
+      r: ec.getBotOpennessR() * 0.52 + lidP.lowerTilt,
+    };
     renderer.updateLids(upperAng, lowerAng, lidP.slant, lidP.width, p.lidUpperThickness, p.lidLowerThickness, cyclops);
 
     // V2.1: Pupil accommodation ("mise au point") — brief constriction on saccade + depth-based offset
@@ -3971,6 +4189,11 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
 
     renderer.updateLayout(p.eyeSpacing, p.eyeScale, p.eyeTilt, cyclops);
     renderer.updateLighting(p.lightAngle, p.lightHeight, p.lightIntensity);
+
+    // V3.11: respiration — the whole rig bobs gently (~0.23 Hz + a faint second
+    // harmonic). The being breathes; stillness is what reads as dead.
+    const bt = performance.now() / 1000;
+    renderer.eyeGroup.position.y = Math.sin(bt * 1.45) * 0.0075 + Math.sin(bt * 3.05 + 1.3) * 0.0018;
 
     renderer.updateEnvVideo();
     renderer.render();

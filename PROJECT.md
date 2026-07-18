@@ -175,6 +175,33 @@
   de face → les hair-cards donnent la densité soyeuse là où la géométrie plate échouait.
 - `window.__eye` expose `lashConfig` pour le tuning console.
 
+## Sprint A (v3.11) — « L'œil est vivant » (2026-07-18, branche v4-realism)
+
+> Audit complet + roadmap 5 sprints : voir `ROADMAP.md`. Cible visuelle : TinyEye (tinynocky).
+
+- **Fix majeur** : drift/micro-saccades/tremor ne tournaient QUE sans visage détecté
+  (`_updateMicro` = branche else du tracking) → zéro vie fixationnelle en usage réel.
+  Nouvelle couche `_updateFixational` ADDITIVE, active dans tous les modes (atténuée
+  ×0.65 en tracking) : drift Ornstein-Uhlenbeck (fini les sinus), micro-saccades
+  CORRECTIVES (déclenchées par l'erreur de drift ou Poisson ~1.7 Hz, dirigées vers la
+  fixation, main-sequence), square-wave jerks (~35 s), glissade post-saccadique (~85 ms).
+  `femConfig` + folder Vitals.
+- **Scan-path facial** : en Track, l'œil fixe œil-G / œil-D / bouche du spectateur
+  (landmarks MediaPipe 473/468/13, dwell 0.3–2.5 s) au lieu de poursuivre le barycentre.
+- **Pupille physiologique** (`pupilPhysConfig`) : réflexe photomoteur depuis la luminance
+  webcam (8×8 downsample ~4 Hz, latence 250 ms, constriction τ=0.3 s / dilatation τ=2.5 s
+  — l'asymétrie est LE tell), hippus permanent (amplitude ∝ obscurité), micro-redilatation
+  post-blink. Testé : constriction pleine en 0.5 s, dilatation ~4× plus lente.
+- **Blinks** : 18 % partiels (amplitude 0.45–0.75), désync G/D 5–15 ms propagée jusqu'aux
+  springs et à la géométrie (updateLids accepte {l,r} par œil), dépression du regard ~2°
+  pendant la fermeture, re-dilatation pupillaire post-blink.
+- **Respiration** : bob vertical du rig ~0.23 Hz + seconde harmonique.
+- **Quick wins matérialité** : zonage wet/dry de la roughness du globe (film lacrymal
+  glossy sur la zone exposée via uLidUp/uLidLow, mat sous les paupières) ; cils passés
+  de MeshBasicMaterial (non éclairé) à MeshStandardMaterial (sheen kératine).
+- Idle refondu : fixations « look-around » (dwell + saccades, wide glances 18 %).
+- `window.__eye` expose femConfig + pupilPhysConfig.
+
 ## Sprint suivant — Sprint 9 : pistes
 
 ### TODO réalisme visuel
