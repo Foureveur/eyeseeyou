@@ -202,6 +202,30 @@
 - Idle refondu : fixations « look-around » (dwell + saccades, wide glances 18 %).
 - `window.__eye` expose femConfig + pupilPhysConfig.
 
+## Sprints B+C+E (v4.0) — la version « banger » (2026-07-18, branche v4-realism)
+
+- **Cils = brins 3D réels** (Sprint B) : `createLashGeometry` refondu — ~110/62 brins par
+  paupière, tubes effilés (12 seg × section triangulaire) sur béziers J-curl, racines
+  plantées SOUS la marge en 2–3 rangées quinconce, clumping par attracteurs partagés,
+  gradient kératine racine→pointe en vertex colors. UN BufferGeometry OPAQUE par paupière
+  (depthWrite on → fini les halos de tri des cards v3.9). Matériau MeshPhysical
+  vertexColors + sheen + clearcoat. Les hair-cards + createLashTexture supprimés.
+  Gradients anatomiques v3.7 et sliders lashConfig conservés.
+- **Iris en relief 3D — POM** (Sprint C, la signature TinyEye) : height field `irisH`
+  (bol montant, collerette charnue bosselée, sillons radiaux, cryptes), le rayon réfracté
+  marche 12 pas dans le relief (parallax occlusion) au lieu de frapper un plan ; normale
+  dérivée + self-shadow 3 taps vers la lumière ; slider `Relief` (uIrisRelief, défaut 0.55).
+- **Tissu irien dynamique** : fibres échantillonnées en espace tissu `rT` — elles se
+  COMPRIMENT quand la pupille se dilate au lieu d'être rognées (testé à pupilSize 0.85 :
+  bande fibreuse dense autour de la pupille géante).
+- **Protrusion cornéenne par défaut** : `corneaBulge` défaut 0 → 0.8 (profil + catchlight).
+- **Chaîne photo** (Sprint E cœur) : EffectComposer — RenderPass → UnrealBloom subtil
+  (threshold 0.88 : catchlights seulement) → OutputPass (ACES+sRGB) → pass grain film +
+  vignette custom. Micro-dérive caméra « hand-held » (~±0.013 @ 0.13 Hz). `photoConfig`
+  + folder « Photo (v4) », désactivé sur mobile, persisté avec le left-bar.
+- Perf mesurée : ~0.7 ms/frame composer inclus (Apple Silicon). Titre → EyeSeeYou v4.
+- Persistance étendue : photo/fem/pupilPhys dans `eyeseeyou_v3_behavior`.
+
 ## Sprint suivant — Sprint 9 : pistes
 
 ### TODO réalisme visuel

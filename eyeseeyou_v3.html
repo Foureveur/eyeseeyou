@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
-<title>EyeSeeYou v3</title>
+<title>EyeSeeYou v4</title>
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -89,6 +89,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Roughness</label><input type="range" id="p-irisRoughness" min="0" max="1" step="0.01" value="0.45"><span class="v">0.45</span></div>
   <div class="pr"><label>Iris Size</label><input type="range" id="p-irisAngle" min="0.30" max="0.80" step="0.005" value="0.55"><span class="v">0.55</span></div>
   <div class="pr"><label>Fibers</label><input type="range" id="p-irisFibers" min="0" max="1" step="0.01" value="0.65"><span class="v">0.65</span></div>
+  <div class="pr"><label>Relief</label><input type="range" id="p-irisRelief" min="0" max="1" step="0.01" value="0.55"><span class="v">0.55</span></div>
   <div class="pr"><label>Tex Mix</label><input type="range" id="p-irisTexMix" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Limbus</label><input type="range" id="p-limbusDark" min="0" max="1" step="0.01" value="0.55"><span class="v">0.55</span></div>
 
@@ -248,6 +249,12 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
 <script type="module">
 import * as THREE from 'three';
 import GUI from 'lil-gui';
+// V4.0: photographic post chain
+import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
+import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from 'three/addons/postprocessing/UnrealBloomPass.js';
+import { ShaderPass } from 'three/addons/postprocessing/ShaderPass.js';
+import { OutputPass } from 'three/addons/postprocessing/OutputPass.js';
 
 // ============================================================
 // V2 — STATE (future Gemma output, mocked via lil-gui)
@@ -368,6 +375,17 @@ const pupilPhysConfig = {
   reflexGain: 0.5,     // luminance → pupil offset gain
 };
 
+// V4.0: photographic post chain — "banger frame" = a PHOTOGRAPH, not a render.
+// Subtle bloom bleeding off the catchlights, film grain, vignette, and a slow
+// hand-held camera drift. Off on mobile (perf).
+const photoConfig = {
+  enabled: !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)),
+  bloom: 0.20,        // UnrealBloom strength (threshold is high — catchlights only)
+  grain: 0.045,       // film grain amount
+  vignette: 0.22,     // lens vignette
+  cameraDrift: 1.0,   // hand-held framing drift multiplier
+};
+
 // V3.4: hand tracking — a pointing finger outranks the face; the eye locks on the
 // fingertip of the hand CLOSEST to the camera and goes cross-eyed as it approaches
 // (targetZ is allowed past 1.0 → the convergence target moves right up to the eyes).
@@ -411,6 +429,9 @@ try {
     if (B.convConfig) Object.assign(convergenceConfig, B.convConfig);
     if (B.hand) Object.assign(handConfig, B.hand);
     if (B.weight) Object.assign(weightConfig, B.weight);
+    if (B.photo) Object.assign(photoConfig, B.photo);
+    if (B.fem) Object.assign(femConfig, B.fem);
+    if (B.pupilPhys) Object.assign(pupilPhysConfig, B.pupilPhys);
     _savedPersonality = B.personality || null;
   }
 } catch (e) {}
@@ -648,112 +669,48 @@ function createLidEdgeStrip(outerGeo, innerGeo, segsU) {
   return geo;
 }
 
-// V3.9: procedural LASH TEXTURE for alpha hair-cards. Draws many fine, curved,
-// tapered hairs with soft anti-aliased edges and translucent tips onto a transparent
-// canvas. Roots sit on the bottom edge (v=0), tips reach up (v=1). One rich texture,
-// tiled by overlapping textured ribbons, reads as a lush fringe from any distance —
-// the industry technique that flat geometry strips can never match head-on.
-let _lashTexCache = null;
-function createLashTexture() {
-  if (_lashTexCache) return _lashTexCache;
-  const W = 512, H = 512;
-  const cv = (typeof document !== 'undefined') ? document.createElement('canvas') : null;
-  if (!cv) return null;
-  cv.width = W; cv.height = H;
-  const g = cv.getContext('2d');
-  g.clearRect(0, 0, W, H);
-  g.lineCap = 'round';
-  const rootY = H - 4;
-  // dense dark root band along the bottom so the lash LINE reads solid
-  const bandGrad = g.createLinearGradient(0, rootY - 26, 0, rootY + 4);
-  bandGrad.addColorStop(0, 'rgba(6,4,3,0)');
-  bandGrad.addColorStop(1, 'rgba(6,4,3,0.95)');
-  g.fillStyle = bandGrad; g.fillRect(0, rootY - 26, W, 30);
-  const N = 44;                                   // hairs across the card
-  for (let i = 0; i < N; i++) {
-    const f = i / (N - 1);
-    const x0 = 10 + f * (W - 20) + (Math.random() - 0.5) * 9;
-    // length: feathered — mix of long and short, longest around the middle
-    const lenBase = 0.5 + 0.45 * Math.sin(f * Math.PI);   // arch, longest mid-card
-    const len = (lenBase + Math.random() * 0.32) * (H - 26);
-    // gentle outward fan + curl: tip drifts sideways and the bezier curves
-    const dir = (f - 0.5) * 2;                     // -1..1 across width
-    const tipX = x0 + dir * 34 + (Math.random() - 0.5) * 22;
-    const tipY = rootY - len;
-    const cx = x0 + dir * 14 + (Math.random() - 0.5) * 12;
-    const cy = rootY - len * (0.45 + Math.random() * 0.15);
-    const rootW = (2.4 + Math.random() * 2.1);     // root thickness (px)
-    // sample the quadratic bezier, draw tapering quads with root→tip alpha/colour fade
-    const STEPS = 26;
-    let prev = null;
-    for (let s = 0; s <= STEPS; s++) {
-      const u = s / STEPS;
-      const a = (1 - u) * (1 - u), b = 2 * (1 - u) * u, c = u * u;
-      const x = a * x0 + b * cx + c * tipX;
-      const y = a * rootY + b * cy + c * tipY;
-      if (prev) {
-        let dx = x - prev.x, dy = y - prev.y; const dl = Math.hypot(dx, dy) || 1; dx /= dl; dy /= dl;
-        const nx = -dy, ny = dx;
-        const w1 = rootW * (1 - prev.u * 0.88) + 0.32;
-        const w2 = rootW * (1 - u * 0.88) + 0.28;
-        // near-black root → dark-brown tip; stays opaque most of the length so the
-        // fringe reads DARK and dense (light-brown earlier looked like peach fuzz)
-        const lum = 4 + u * 12;
-        const al = (1 - u * 0.35) * (0.92 + Math.random() * 0.08);
-        g.fillStyle = `rgba(${Math.round(lum)},${Math.round(lum * 0.72)},${Math.round(lum * 0.55)},${al})`;
-        g.beginPath();
-        g.moveTo(prev.x + nx * w1, prev.y + ny * w1);
-        g.lineTo(prev.x - nx * w1, prev.y - ny * w1);
-        g.lineTo(x - nx * w2, y - ny * w2);
-        g.lineTo(x + nx * w2, y + ny * w2);
-        g.closePath();
-        g.fill();
-      }
-      prev = { x, y, u };
-    }
-  }
-  const tex = new THREE.CanvasTexture(cv);
-  tex.wrapS = THREE.ClampToEdgeWrapping;
-  tex.wrapT = THREE.ClampToEdgeWrapping;
-  tex.anisotropy = 8;
-  tex.needsUpdate = true;
-  _lashTexCache = tex;
-  return tex;
-}
-
+// V4.0 (Sprint B): REAL 3D LASH STRANDS — the hero-close-up technique.
+// The v3.9 alpha cards failed head-on for structural reasons: flat ribbons seen
+// edge-on, one shared unlit texture, transparency-sorting halos. At this scale
+// (eyes fill the screen) each lash must be an actual tapered curved tube that
+// catches light. ~110 upper / ~62 lower strands per eye, merged into ONE OPAQUE
+// BufferGeometry per lid — depthWrite on, no sorting, real depth, real shading.
+// Anatomy gradients kept from v3.7 (refs PMC6147748, Amador 2015): density peaks
+// centrally, length peaks temporally (cat-eye), curl strongest medial/central.
+// Roots planted UNDER the margin surface in 2–3 staggered rows; clumping = shared
+// tip attractors; root→tip keratin gradient baked into vertex colors.
 function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight = false) {
-  // V3.9: ALPHA HAIR-CARDS. Instead of one flat strip per hair (which foreshortens into
-  // fangs head-on), lay overlapping CURVED RIBBONS along the lid margin, each mapped with
-  // the procedural lash texture above. The texture carries the fine hairs + soft tips; the
-  // ribbon carries the C-curl and the directional flow (vertical at the inner canthus →
-  // leaning out to the temporal wing). Few wide cards → a continuous, lush, silky fringe.
-  //   femininity: ♀ long/curled/dense · ♂ short/straight/sparse.  (refs: PMC6147748, Amador 2015)
   const pos = outerGeo.getAttribute('position');
   const nrm = outerGeo.getAttribute('normal');
-  const verts = [], uvs = [], indices = [];
-  const SEGV = 7;                              // ribbon length segments (for the curl)
+  const SEG = 12, SIDES = 3;                   // 12 length segments, triangular section
   const startFrac = 0.285, endFrac = 0.715;
   const arcSpan = endFrac - startFrac;
   const sign = isUpper ? 1 : -1;
   const RR = outerGeo.userData?.radius || 0.7;
   const DENS = lashConfig.density, THK = lashConfig.thickness, LENM = lashConfig.length, CURLM = lashConfig.curl;
   const FEM = lashConfig.femininity;
-  const fLen = lerp(0.72, 1.28, FEM), fCurl = lerp(0.5, 1.2, FEM), fDens = lerp(0.7, 1.2, FEM);
+  const fLen = lerp(0.72, 1.28, FEM), fCurl = lerp(0.55, 1.25, FEM), fDens = lerp(0.7, 1.2, FEM);
   const fanDir = isRight ? -1 : 1;
-  // card count — few and WIDE (the texture supplies the hair density)
-  const nCards = Math.max(8, Math.round((isUpper ? 20 : 14) * (DENS / 3.0) * fDens));
-  const cardFrac = arcSpan / nCards;
+  const nLash = Math.max(16, Math.round((isUpper ? 110 : 62) * (DENS / 3.0) * fDens));
 
+  const verts = [], norms = [], cols = [], indices = [];
   const N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
   const Root = new THREE.Vector3(), Tip = new THREE.Vector3(), Ctrl = new THREE.Vector3();
-  const Cen = new THREE.Vector3(), Hh = new THREE.Vector3(), tmp = new THREE.Vector3();
+  const P = new THREE.Vector3(), Tan = new THREE.Vector3(), Ax1 = new THREE.Vector3(), Ax2 = new THREE.Vector3();
 
-  for (let c = 0; c < nCards; c++) {
-    const tArc = (c + 0.5) / nCards;
+  // clump attractors — neighbouring lashes share a tip offset (mascara-like gather)
+  const nClump = Math.max(3, Math.round(nLash / 6));
+  const clumps = [];
+  for (let ci = 0; ci < nClump; ci++) {
+    clumps.push({ t: (Math.random() - 0.5) * 0.5, b: (Math.random() - 0.5) * 0.6 });
+  }
+
+  for (let li = 0; li < nLash; li++) {
+    const tArc = THREE.MathUtils.clamp((li + 0.5) / nLash + (Math.random() - 0.5) * (0.4 / nLash), 0, 1);
     const nasal = isRight ? tArc : (1.0 - tArc);
     const temporal = 1.0 - nasal;
-    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.42);   // thins gently at the canthi
-    if (centre < 0.12) continue;
+    const centre = Math.pow(Math.sin(tArc * Math.PI), 0.42);
+    if (centre < 0.10 || Math.random() > 0.35 + centre) continue;   // thin out at canthi
 
     const tC = startFrac + tArc * arcSpan;
     const iC = Math.max(0, Math.min(segsU, Math.round(tC * segsU)));
@@ -761,45 +718,76 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     T.set(0, sign, 0);
     B.crossVectors(N, T).normalize();
 
-    // length: longest at the temporal third; ragged per-card
-    const lenProfile = lerp(0.62, 1.22, temporal) * (0.82 + 0.18 * centre);
-    const H = RR * (isUpper ? 0.26 : 0.14) * LENM * fLen * lenProfile * (0.85 + Math.random() * 0.3);
-    // flow: rise as a fringe just off the margin — up-curl (T) leads, a forward lift
-    // (N) so it stands off the lid, a gentle temporal sweep (B) toward the wing
-    const upC = fCurl * (isUpper ? 1 : -1) * (0.72 - 0.18 * temporal);
-    const latC = fanDir * (0.05 + temporal * 0.3) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM);
-    const outC = 0.55;
+    // staggered rows along the margin, like real cilia
+    const row = li % 3;
+    Root.set(pos.getX(iC), pos.getY(iC), pos.getZ(iC))
+      .addScaledVector(N, -RR * 0.010)                     // planted under the surface
+      .addScaledVector(T, RR * 0.006 * row * (0.5 + Math.random()))
+      .addScaledVector(B, (Math.random() - 0.5) * RR * 0.008);
 
-    const rx = pos.getX(iC), ry = pos.getY(iC), rz = pos.getZ(iC);
-    Root.set(rx, ry, rz);
-    Tip.copy(Root).addScaledVector(N, H * outC).addScaledVector(T, H * upC).addScaledVector(B, H * latC);
-    // control point bows OUTWARD from the chord → C-curl
-    Ctrl.copy(Root).add(Tip).multiplyScalar(0.5)
-      .addScaledVector(N, H * (0.14 + 0.16 * fCurl)).addScaledVector(T, H * 0.12 * sign);
+    const lenProfile = lerp(0.62, 1.20, temporal) * (0.82 + 0.18 * centre);
+    const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile * (0.78 + Math.random() * 0.44);
+    const curl = CURLM * fCurl * lerp(1.05, 0.75, temporal) * (isUpper ? 1.0 : 0.62) * (0.8 + Math.random() * 0.4);
+    const lat = fanDir * (0.04 + temporal * 0.34) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
+      + (Math.random() - 0.5) * 0.16;
 
-    // half-width of the card along the arc (world) — overlap neighbours for continuity
-    const iW = Math.max(0, Math.min(segsU, Math.round((tC + cardFrac * 0.5) * segsU)));
-    tmp.set(pos.getX(iW) - rx, pos.getY(iW) - ry, pos.getZ(iW) - rz);
-    const halfW = Math.max(RR * 0.03, tmp.length()) * 1.25 * (0.9 + Math.random() * 0.2);
-    const flipU = Math.random() < 0.5;          // mirror the texture for variety
+    const cl = clumps[Math.min(nClump - 1, Math.floor(tArc * nClump))];
+    const clT = lashConfig.clumping;
 
+    // J-curl bezier: leaves the margin along the normal, tip sweeps along +T
+    // (away from the aperture — up for the upper lid, down for the lower)
+    Ctrl.copy(Root).addScaledVector(N, L * 0.62)
+      .addScaledVector(T, L * 0.10 * curl)
+      .addScaledVector(B, L * lat * 0.35);
+    Tip.copy(Root)
+      .addScaledVector(N, L * Math.max(0.30, 0.88 - 0.34 * curl))
+      .addScaledVector(T, L * (0.32 + 0.55 * curl) + L * cl.t * clT * 0.35)
+      .addScaledVector(B, L * lat + L * cl.b * clT * 0.4);
+
+    const rootR = RR * 0.0032 * THK * (0.78 + Math.random() * 0.5);
+    const shade = 0.8 + Math.random() * 0.45;
     const base = verts.length / 3;
-    for (let s = 0; s <= SEGV; s++) {
-      const v = s / SEGV;
-      const a = (1 - v) * (1 - v), b = 2 * (1 - v) * v, cc = v * v;
-      Cen.set(
-        a * Root.x + b * Ctrl.x + cc * Tip.x,
-        a * Root.y + b * Ctrl.y + cc * Tip.y,
-        a * Root.z + b * Ctrl.z + cc * Tip.z,
+
+    for (let s = 0; s <= SEG; s++) {
+      const v = s / SEG;
+      const a = (1 - v) * (1 - v), b2 = 2 * (1 - v) * v, c2 = v * v;
+      P.set(
+        a * Root.x + b2 * Ctrl.x + c2 * Tip.x,
+        a * Root.y + b2 * Ctrl.y + c2 * Tip.y,
+        a * Root.z + b2 * Ctrl.z + c2 * Tip.z,
       );
-      // horizontal axis of the card ≈ along the arc (B), narrowing slightly toward the tip
-      Hh.copy(B).multiplyScalar(halfW * (1.0 - 0.15 * v));
-      const uL = flipU ? 1 : 0, uR = flipU ? 0 : 1;
-      verts.push(Cen.x - Hh.x, Cen.y - Hh.y, Cen.z - Hh.z); uvs.push(uL, v);
-      verts.push(Cen.x + Hh.x, Cen.y + Hh.y, Cen.z + Hh.z); uvs.push(uR, v);
+      Tan.set(
+        (1 - v) * (Ctrl.x - Root.x) + v * (Tip.x - Ctrl.x),
+        (1 - v) * (Ctrl.y - Root.y) + v * (Tip.y - Ctrl.y),
+        (1 - v) * (Ctrl.z - Root.z) + v * (Tip.z - Ctrl.z),
+      ).normalize();
+      Ax1.crossVectors(Tan, B);
+      if (Ax1.lengthSq() < 0.1) Ax1.copy(N);
+      Ax1.normalize();
+      Ax2.crossVectors(Tan, Ax1).normalize();
+      const rad = Math.max(rootR * Math.pow(1 - v, 0.85), RR * 0.0004);
+      // keratin gradient: near-black root → warm dark-brown tip
+      const kv = Math.pow(v, 1.4);
+      const cr = (0.030 + 0.130 * kv) * shade;
+      const cg = (0.020 + 0.085 * kv) * shade;
+      const cb = (0.016 + 0.060 * kv) * shade;
+      for (let k = 0; k < SIDES; k++) {
+        const ang = (k / SIDES) * Math.PI * 2;
+        const ox = Math.cos(ang), oy = Math.sin(ang);
+        verts.push(
+          P.x + (Ax1.x * ox + Ax2.x * oy) * rad,
+          P.y + (Ax1.y * ox + Ax2.y * oy) * rad,
+          P.z + (Ax1.z * ox + Ax2.z * oy) * rad,
+        );
+        norms.push(Ax1.x * ox + Ax2.x * oy, Ax1.y * ox + Ax2.y * oy, Ax1.z * ox + Ax2.z * oy);
+        cols.push(cr, cg, cb);
+      }
       if (s > 0) {
-        const k = base + (s - 1) * 2;
-        indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2);
+        const r0 = base + (s - 1) * SIDES, r1 = base + s * SIDES;
+        for (let k = 0; k < SIDES; k++) {
+          const k2 = (k + 1) % SIDES;
+          indices.push(r0 + k, r1 + k, r0 + k2, r0 + k2, r1 + k, r1 + k2);
+        }
       }
     }
   }
@@ -807,8 +795,8 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const geo = new THREE.BufferGeometry();
   geo.setIndex(indices);
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
-  geo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
-  geo.computeVertexNormals();
+  geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
+  geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
   return geo;
 }
 
@@ -938,10 +926,31 @@ uniform sampler2D tIris;
 uniform mat3 uLidRot;
 uniform float uLidUp, uLidLow, uMeniscus;
 uniform vec2 uLightXY;
+uniform float uIrisRelief;
 float gEyeIrisMask = 0.0;
 float gMeniscus = 0.0;
 float gWet = 1.0;
 ${EYE_GLSL_NOISE}
+// V4.0: iris HEIGHT FIELD — the sculpted 3D iris of the TinyEye reference.
+// A bowl rising from the pupil margin, a fleshy lumpy collarette ridge, radial
+// furrows carved in, crypt pits. Heights normalized 0..1 (1 = relief top).
+// Sampled in REST tissue space (rT) so the sculpt compresses with the pupil.
+float irisH(vec2 q, float pr) {
+  float r = length(q);
+  if (r > 1.12) return 0.0;
+  float th = atan(q.y, q.x) / 6.2831853 + 0.5;
+  float rT = 0.30 + (r - pr) * 0.70 / max(1.0 - pr, 1e-3);
+  float coll = 0.46;
+  float h = smoothstep(pr - 0.02, coll + 0.28, r) * 0.62;                     // rising bowl
+  float ridge = smoothstep(coll - 0.14, coll, rT) * (1.0 - smoothstep(coll, coll + 0.17, rT));
+  float lump = eyeNoiseP(vec2(th * 22.0, rT * 5.0), 22.0);
+  h += ridge * (0.30 + 0.50 * lump);                                          // fleshy collarette
+  float fur = 1.0 - abs(2.0 * eyeNoiseP(vec2(th * 44.0 + 2.0, rT * 2.5), 44.0) - 1.0);
+  h -= fur * fur * 0.28 * smoothstep(coll, coll + 0.30, rT);                  // radial furrows
+  float cry = eyeNoise(q * 6.0 + 7.0);
+  h -= smoothstep(0.55, 0.25, cry) * 0.22 * ridge;                            // crypt pits
+  return clamp(h, 0.0, 1.0);
+}
 `;
 
 const EYE_GLSL_COLOR = /* glsl */`
@@ -959,22 +968,46 @@ const EYE_GLSL_COLOR = /* glsl */`
   float win = 1.0 - smoothstep(irisAng - lw, irisAng + lw, ang);
   float limbusBand = smoothstep(irisAng - lw * 1.6, irisAng, ang) * (1.0 - smoothstep(irisAng, irisAng + lw * 2.4, ang));
 
-  // --- physically-based parallax: refract the view ray at the surface, then
-  //     intersect the recessed iris plane. This is what makes the iris "live"
-  //     under the cornea and the gaze direction readable from any angle. ---
+  // --- V4.0: physically-based parallax + RELIEF. The refracted ray now marches
+  //     a sculpted height field (parallax occlusion mapping) instead of hitting
+  //     a flat plane — the iris becomes a 3D bowl whose collarette self-shadows.
+  //     This is THE TinyEye signature. ---
   vec3 V = normalize(vObjPos - uObjCam);
   float eta = 1.0 / mix(1.0, uIor, uRefract);
   vec3 rd = refract(V, dirN, eta);
   if (rd.z > -1e-4) rd = V;                              // grazing fallback
-  float tI = (irisPlaneZ - vObjPos.z) / rd.z;
-  vec2 hit = vObjPos.xy + rd.xy * max(tI, 0.0);
-  vec2 q = hit / irisDiscR;                              // -1..1 across the iris disc
+  float pr = mix(0.14, 0.62, clamp(uPupil, 0.0, 1.0));
+  float reliefD = uRadius * 0.045 * uIrisRelief;         // relief depth (object units)
+  float topZ = irisPlaneZ + reliefD;
+  float tI = (topZ - vObjPos.z) / rd.z;
+  vec2 q = (vObjPos.xy + rd.xy * max(tI, 0.0)) / irisDiscR;
+  if (reliefD > 1e-5 && win > 0.001) {
+    const int PSTEP = 12;
+    float dtL = (reliefD / float(PSTEP)) / max(-rd.z, 0.06);
+    vec2 dq = rd.xy * dtL / irisDiscR;
+    float layer = 1.0;
+    float dl = 1.0 / float(PSTEP);
+    float prevD = 1.0 - irisH(q, pr);                    // signed gap: layer − height
+    for (int i = 0; i < PSTEP; i++) {
+      layer -= dl;
+      q += dq;
+      float d = layer - irisH(q, pr);
+      if (d <= 0.0) {                                    // crossed the surface
+        float w = prevD / max(prevD - d, 1e-4);
+        q -= dq * (1.0 - w);                             // interpolate the exact hit
+        break;
+      }
+      prevD = d;
+    }
+  }
   float rr = length(q);
   float th = atan(q.y, q.x);
   float thN = th / 6.2831853 + 0.5;                      // 0..1 around
+  // tissue-space radius: the fibre pattern COMPRESSES with the pupil instead of
+  // being cropped by it (a hole opening over a frozen print was the old tell)
+  float rT = 0.30 + (rr - pr) * 0.70 / max(1.0 - pr, 1e-3);
 
   // --- pupil: SDF disc, warped per shape sliders. Round by construction. ---
-  float pr = mix(0.14, 0.62, clamp(uPupil, 0.0, 1.0));
   float sx = 1.0 - clamp(uPupilCat * 0.78 + uPupilReptile * 0.86, 0.0, 0.92); // vertical slit
   float sy = (1.0 - clamp(uPupilGoat * 0.80, 0.0, 0.92)) * (1.0 + uPupilOval * 0.6); // bar / oval
   float dPup = length(vec2(q.x / sx, q.y / sy));
@@ -989,8 +1022,9 @@ const EYE_GLSL_COLOR = /* glsl */`
   float ruff = (1.0 - smoothstep(pr, pr + 0.13, dPup)) * (1.0 - pupMask); // pupillary ruff
 
   // --- procedural iris: fibers radiate, crypts pit, collarette rings ---
-  float fib  = eyeFbmP(vec2(thN * 48.0, rr * 5.0), 48.0);
-  float fib2 = eyeFbmP(vec2(thN * 96.0 + 7.3, rr * 9.0), 96.0);
+  // V4.0: sampled at rT (tissue space) → fibres stretch/compress with the pupil
+  float fib  = eyeFbmP(vec2(thN * 48.0, rT * 5.0), 48.0);
+  float fib2 = eyeFbmP(vec2(thN * 96.0 + 7.3, rT * 9.0), 96.0);
   float crypt = eyeFbm(q * 5.0 + 3.7);
   float collR = 0.42 + 0.10 * (eyeFbmP(vec2(thN * 24.0, 0.5), 24.0) - 0.5);
   float collBand = smoothstep(collR - 0.05, collR, rr) * (1.0 - smoothstep(collR, collR + 0.05, rr));
@@ -998,7 +1032,7 @@ const EYE_GLSL_COLOR = /* glsl */`
   vec3 irisCol = mix(uIrisColorA, uIrisColorB, smoothstep(0.10, 0.95, rr));
   irisCol *= mix(1.0, 0.55 + 0.90 * fib, uFibers);            // radial striation
   irisCol *= mix(1.0, 0.80 + 0.40 * fib2, uFibers);           // fine secondary fibers
-  float fib3 = 1.0 - abs(2.0 * eyeNoiseP(vec2(thN * 160.0 + 3.1, rr * 14.0), 160.0) - 1.0);
+  float fib3 = 1.0 - abs(2.0 * eyeNoiseP(vec2(thN * 160.0 + 3.1, rT * 14.0), 160.0) - 1.0);
   irisCol *= mix(1.0, 0.78 + 0.45 * pow(fib3, 2.0), uFibers * 0.7);  // crisp ridged strands
   irisCol = mix(irisCol, irisCol * 0.55, smoothstep(0.55, 0.20, crypt) * 0.45); // crypts
   irisCol *= mix(0.82, 1.0, smoothstep(collR - 0.12, collR + 0.10, rr));        // pupillary zone darker
@@ -1006,6 +1040,27 @@ const EYE_GLSL_COLOR = /* glsl */`
   // light crescent: light refracted through the cornea brightens the far side
   float cres = 0.5 + 0.5 * dot(normalize(q + vec2(1e-4)), normalize(-uLightXY));
   irisCol *= 0.85 + 0.30 * cres;
+  // --- V4.0: relief shading — normal derived from the height field + soft
+  //     self-shadow marched toward the light. Turns the print into a sculpt. ---
+  if (uIrisRelief > 0.001) {
+    float e2 = 0.03;
+    float hC2 = irisH(q, pr);
+    float sX = (hC2 - irisH(q + vec2(e2, 0.0), pr)) / e2;
+    float sY = (hC2 - irisH(q + vec2(0.0, e2), pr)) / e2;
+    float k2 = (reliefD / max(irisDiscR, 1e-4)) * 2.2;   // slope → normal, punched up
+    vec3 nR = normalize(vec3(sX * k2, sY * k2, 1.0));
+    vec3 Ld = normalize(vec3(uLightXY, 0.85));
+    float lam = clamp(dot(nR, Ld), 0.0, 1.0);
+    vec2 lq = normalize(uLightXY + vec2(1e-4)) * 0.045;
+    float sh = 1.0;
+    for (int i = 1; i <= 3; i++) {
+      float hs = irisH(q + lq * float(i), pr);
+      sh = min(sh, 1.0 - clamp((hs - hC2 - float(i) * 0.05) * 2.0, 0.0, 1.0));
+    }
+    float shade = (0.45 + 0.85 * lam) * (0.60 + 0.40 * sh);
+    irisCol *= mix(1.0, shade, uIrisRelief * 0.9);
+    irisCol *= 0.82 + 0.28 * hC2;                        // valleys read deeper
+  }
   vec3 texCol = texture2D(tIris, clamp(q * 0.5 + 0.5, 0.0, 1.0)).rgb;
   irisCol = mix(irisCol, texCol, uTexMix);
   irisCol *= uIrisTint;
@@ -1183,7 +1238,45 @@ class EyeRenderer {
 
     this._setupEnv();
     this._setupLights();
+    this._setupComposer();   // V4.0: photographic post chain
     window.addEventListener('resize', () => this._onResize());
+  }
+
+  // V4.0: RenderPass → subtle bloom (catchlights only) → OutputPass (ACES +
+  // sRGB) → grain/vignette. The grain pass runs AFTER output so it grades the
+  // final image like film stock, not the linear HDR buffer.
+  _setupComposer() {
+    const GrainVignetteShader = {
+      uniforms: {
+        tDiffuse: { value: null },
+        uTime: { value: 0 },
+        uGrain: { value: photoConfig.grain },
+        uVig: { value: photoConfig.vignette },
+      },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tDiffuse;
+        uniform float uTime, uGrain, uVig;
+        varying vec2 vUv;
+        float grHash(vec2 p) { p = fract(p * vec2(123.34, 456.21)); p += dot(p, p + 45.32); return fract(p.x * p.y); }
+        void main() {
+          vec4 c = texture2D(tDiffuse, vUv);
+          float g = (grHash(vUv * vec2(1917.0, 1081.0) + fract(uTime * 1.37) * 7.13) - 0.5) * uGrain;
+          c.rgb += g * (0.25 + c.rgb);                     // grain rides the tones, film-like
+          float d = distance(vUv, vec2(0.5));
+          c.rgb *= 1.0 - smoothstep(0.42, 0.92, d) * uVig; // lens vignette
+          gl_FragColor = c;
+        }`,
+    };
+    this.composer = new EffectComposer(this.renderer);
+    this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this._bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), photoConfig.bloom, 0.5, 0.88);
+    this.composer.addPass(this._bloomPass);
+    this.composer.addPass(new OutputPass());
+    this._grainPass = new ShaderPass(GrainVignetteShader);
+    this.composer.addPass(this._grainPass);
   }
 
   _setupEnv() {
@@ -1365,6 +1458,7 @@ class EyeRenderer {
       uIor: { value: 1.376 },
       uIrisRough: { value: 0.45 },
       uFibers: { value: 0.65 },
+      uIrisRelief: { value: 0.55 },   // V4.0: POM height-field depth
       uIrisColorA: { value: new THREE.Color('#b07830') },
       uIrisColorB: { value: new THREE.Color('#5a3214') },
       uIrisTint: { value: new THREE.Color('#ffffff') },
@@ -1538,21 +1632,19 @@ class EyeRenderer {
       grp.add(edgeMesh);
       this._lidEdgeMats.push(eMat);
 
-      // Lashes — procedural triangle strips along lid edge
-      const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);   // anatomical counts (90-160 / 75-80)
-      // V3.11: LIT lash material — MeshBasic was unlit (paper-cutout black).
-      // Standard material picks up the key light + env → keratin sheen, modelling.
-      const lashMat = new THREE.MeshStandardMaterial({
-        map: createLashTexture(),   // V3.9: alpha hair-card texture (fine hairs + soft tips)
+      // Lashes — V4.0: real 3D strands (see createLashGeometry). OPAQUE material:
+      // no transparency → no sorting halos; vertex colors carry the root→tip
+      // keratin gradient; sheen + clearcoat give the anisotropic-ish glint.
+      const lashGeo = createLashGeometry(outerGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);
+      const lashMat = new THREE.MeshPhysicalMaterial({
+        vertexColors: true,
         color: 0xffffff,
-        roughness: 0.45,
+        roughness: 0.34,
         metalness: 0.0,
-        envMapIntensity: 0.7,
-        transparent: true,
-        alphaTest: 0.04,            // low → keep soft anti-aliased hair edges (dark = no fuzz)
-        depthWrite: false,          // soft blended fringe, drawn after the eye (renderOrder)
-        side: THREE.DoubleSide,
-        depthTest: true,
+        sheen: 0.55, sheenColor: new THREE.Color(0x9a7a5c), sheenRoughness: 0.45,
+        clearcoat: 0.22, clearcoatRoughness: 0.35,
+        envMapIntensity: 0.9,
+        side: THREE.FrontSide,
       });
       const lashMesh = new THREE.Mesh(lashGeo, lashMat);
       lashMesh.name = 'lashes';
@@ -1708,6 +1800,7 @@ class EyeRenderer {
   }
   setIrisAngle(v) { this._irisAngleBase = v; this._applyIrisAngle(); }
   setFibers(v) { for (const u of this.eyeUniformSets) u.uFibers.value = v; }
+  setIrisRelief(v) { for (const u of this.eyeUniformSets) u.uIrisRelief.value = v; }   // V4.0
   setTexMix(v) { for (const u of this.eyeUniformSets) u.uTexMix.value = v; }
   setVeins(v) { for (const u of this.eyeUniformSets) u.uVeins.value = v; }
   setMeniscus(v) { for (const u of this.eyeUniformSets) u.uMeniscus.value = v; }
@@ -2181,9 +2274,24 @@ class EyeRenderer {
     }
   }
 
-  render() { this.renderer.render(this.scene, this.camera); }
+  render() {
+    if (photoConfig.enabled && this.composer) {
+      this._bloomPass.strength = photoConfig.bloom;
+      this._grainPass.uniforms.uGrain.value = photoConfig.grain;
+      this._grainPass.uniforms.uVig.value = photoConfig.vignette;
+      this._grainPass.uniforms.uTime.value = performance.now() / 1000;
+      this.composer.render();
+    } else {
+      this.renderer.render(this.scene, this.camera);
+    }
+  }
 
-  _onResize() { this.camera.aspect = innerWidth / innerHeight; this.camera.updateProjectionMatrix(); this.renderer.setSize(innerWidth, innerHeight); }
+  _onResize() {
+    this.camera.aspect = innerWidth / innerHeight;
+    this.camera.updateProjectionMatrix();
+    this.renderer.setSize(innerWidth, innerHeight);
+    this.composer?.setSize(innerWidth, innerHeight);
+  }
 }
 
 
@@ -2301,7 +2409,8 @@ class EyeController {
     this.params = {
       pupilSize: 0.35,
       irisColorTint: '#ffffff', irisRoughness: 0.45, irisDepth: 0.08, irisParallax: 1.0,
-      irisColorA: '#b07830', irisColorB: '#5a3214', irisAngle: 0.55, irisFibers: 0.65,
+      irisColorA: '#b07830', irisColorB: '#5a3214', irisAngle: 0.55, irisFibers: 0.65, irisRelief: 0.55,
+      corneaBulge: 0.8,   // V4.0: real corneal protrusion by default (profile + catchlight)
       irisTexMix: 0, limbusDark: 0.55, veins: 0.5, meniscus: 0.5, scleraTint: '#f4ece2',
       browHeight: 0, browThickness: 1.0, browShow: 0,
       lid3d: 1,
@@ -3708,6 +3817,7 @@ class DebugUI {
       case 'irisColorB': r.setIrisColorB(val); break;
       case 'irisAngle': r.setIrisAngle(val); break;
       case 'irisFibers': r.setFibers(val); break;
+      case 'irisRelief': r.setIrisRelief(val); break;
       case 'irisTexMix': r.setTexMix(val); break;
       case 'limbusDark': r.setLimbusDark(val); break;
       case 'veins': r.setVeins(val); break;
@@ -3823,7 +3933,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -3856,6 +3966,8 @@ async function main() {
   renderer.setScleraTint(p.scleraTint);
   renderer.setIrisAngle(p.irisAngle);
   renderer.setFibers(p.irisFibers);
+  renderer.setIrisRelief(p.irisRelief);                       // V4.0: POM relief
+  renderer.setMorphTarget('corneaBulge', p.corneaBulge);      // V4.0: corneal protrusion
   renderer.setTexMix(p.irisTexMix);
   renderer.setVeins(p.veins);
   renderer.setMeniscus(p.meniscus);
@@ -3920,7 +4032,9 @@ async function main() {
       localStorage.setItem('eyeseeyou_v3_blink', JSON.stringify(blinkConfig));
       localStorage.setItem('eyeseeyou_v3_behavior', JSON.stringify({
         lash: lashConfig, heartbeat, pupilFocus: pupilFocusConfig,
-        gazeCoupling, convConfig: convergenceConfig, hand: handConfig, weight: weightConfig, personality: persona.personality,
+        gazeCoupling, convConfig: convergenceConfig, hand: handConfig, weight: weightConfig,
+        photo: photoConfig, fem: femConfig, pupilPhys: pupilPhysConfig,
+        personality: persona.personality,
       }));
       leftBar._saved = '✓ saved';
       saveCtrl.name('💾 SAVED ✓');
@@ -4048,6 +4162,15 @@ async function main() {
   gHand.add(handConfig, 'flinchSpeed', 0.5, 4, 0.1).name('flinch threshold');
   gHand.add(handConfig, 'smoothing', 0.05, 1, 0.05).name('finger snappiness');
   gHand.close();
+
+  // V4.0: photographic post chain
+  const gPhoto = gui.addFolder('Photo (v4)');
+  gPhoto.add(photoConfig, 'enabled').name('post-processing');
+  gPhoto.add(photoConfig, 'bloom', 0, 1, 0.01).name('bloom');
+  gPhoto.add(photoConfig, 'grain', 0, 0.15, 0.005).name('grain');
+  gPhoto.add(photoConfig, 'vignette', 0, 0.6, 0.01).name('vignette');
+  gPhoto.add(photoConfig, 'cameraDrift', 0, 2, 0.05).name('camera drift');
+  gPhoto.close();
 
   const gTrack = gui.addFolder('Camera feed');
   const applyMirrorCss = () => {
@@ -4194,6 +4317,10 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     // harmonic). The being breathes; stillness is what reads as dead.
     const bt = performance.now() / 1000;
     renderer.eyeGroup.position.y = Math.sin(bt * 1.45) * 0.0075 + Math.sin(bt * 3.05 + 1.3) * 0.0018;
+    // V4.0: hand-held camera drift — the framing itself breathes like a real shot
+    const cd = photoConfig.cameraDrift;
+    renderer.camera.position.x = Math.sin(bt * 0.131) * 0.013 * cd;
+    renderer.camera.position.y = Math.cos(bt * 0.177 + 0.8) * 0.010 * cd;
 
     renderer.updateEnvVideo();
     renderer.render();
