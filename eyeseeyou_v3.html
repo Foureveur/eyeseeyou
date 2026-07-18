@@ -1150,9 +1150,11 @@ const EYE_GLSL_COLOR = /* glsl */`
   // warm shadow — occluded light on translucent tissue shifts red, not gray
   eyeCol *= mix(vec3(1.0), vec3(0.62, 0.45, 0.40), clamp(occUp + occLow, 0.0, 0.85));
 
-  // --- tear meniscus: thin wet glint line where the lids touch the globe ---
-  float mUp = smoothstep(0.10, 0.02, abs(polarL - uLidUp - 0.035));
-  float mLow = smoothstep(0.10, 0.02, abs(uLidLow - polarL - 0.035));
+  // --- tear meniscus — V4.5.1: NARROW. The old 0.10-rad falloff painted a wide
+  //     misty white band above the lower lid ("ombre blanche"); a real meniscus
+  //     is a thin crisp glint hugging the contact line. ---
+  float mUp = smoothstep(0.032, 0.007, abs(polarL - uLidUp - 0.018));
+  float mLow = smoothstep(0.032, 0.007, abs(uLidLow - polarL - 0.018));
   gMeniscus = (mUp * 0.5 + mLow) * uMeniscus;
 
   // --- V3.11: tear-film zoning — the EXPOSED globe carries a glossy tear film,
@@ -1178,8 +1180,8 @@ const EYE_GLSL_RIM = /* glsl */`
   // sclera SSS approximation — thin translucent tissue glows warm at grazing angles
   float rimE = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.5);
   gl_FragColor.rgb += vec3(0.30, 0.09, 0.05) * rimE * 0.28 * (1.0 - gEyeIrisMask);
-  // wet meniscus glint along the lid contact lines
-  gl_FragColor.rgb += vec3(0.72, 0.76, 0.80) * gMeniscus * 0.30;
+  // wet meniscus glint along the lid contact lines (V4.5.1: crisper, dimmer)
+  gl_FragColor.rgb += vec3(0.72, 0.76, 0.80) * gMeniscus * 0.24;
 }
 `;
 
