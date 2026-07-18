@@ -393,6 +393,14 @@ const pupilPhysConfig = {
   accomGain: 6.0,      // depth-velocity → oscillator kick
 };
 
+// V4.10: HEAD orientation — the whole eye rig (globes + lids + sockets) can turn
+// like a head while the GAZE stays locked on the webcam target: setGaze converts
+// the world-space target direction into head-local space, so the eyes
+// counter-rotate within their oculomotor range (±~36°) to hold eye contact.
+// Turn the head past that range and the eyes saturate — like a real person
+// losing eye contact over their shoulder.
+const headConfig = { yaw: 0, pitch: 0, sway: false, swayAmp: 0.12 };
+
 // V4.7: photic LID response — outside a comfortable luminance band the lids
 // react, not just the pupil: photophobic squint against glare, reflex blink on
 // a sudden flash, slightly widened aperture in darkness. All optional.
@@ -467,6 +475,7 @@ try {
     if (B.fem) Object.assign(femConfig, B.fem);
     if (B.pupilPhys) Object.assign(pupilPhysConfig, B.pupilPhys);
     if (B.exposure) Object.assign(exposureConfig, B.exposure);
+    if (B.head) Object.assign(headConfig, B.head);
     _savedPersonality = B.personality || null;
   }
 } catch (e) {}
@@ -1254,8 +1263,9 @@ ${EYE_GLSL_NOISE}`)
   diffuseColor.rgb = mix(diffuseColor.rgb, marginCol, marginBand * uMarginTint);
   float crease = smoothstep(0.60, 0.84, lv) * (1.0 - smoothstep(0.84, 1.0, lv));
   diffuseColor.rgb *= 1.0 - crease * 0.16;                // fold shading
-  float rootLine = smoothstep(0.085, 0.0, lv);            // lash-root shadow band
-  diffuseColor.rgb *= 1.0 - rootLine * 0.48;
+  float rootLine = smoothstep(0.10, 0.0, lv);             // lash-root shadow band
+  diffuseColor.rgb *= 1.0 - rootLine * 0.62;              // V4.10: deeper — the dark
+                                                          // margin line IS the eye's contrast
   float mott = eyeFbm(vLidUv * vec2(18.0, 7.0));          // pigment mottling
   float mott2 = eyeNoise(vLidUv * vec2(60.0, 24.0) + 13.1);
   diffuseColor.rgb *= 0.94 + 0.11 * mott;
@@ -2207,6 +2217,11 @@ class EyeRenderer {
 
       const _sL = new THREE.Vector3(), _sR = new THREE.Vector3();
       const _dL = new THREE.Vector3(), _dR = new THREE.Vector3();
+      // V4.10: gaze directions are computed in WORLD space but pivot rotations are
+      // LOCAL to the (possibly head-rotated) eyeGroup — convert through the
+      // inverse head quaternion so the eyes counter-rotate and keep eye contact.
+      const _qHead = new THREE.Quaternion();
+      this.eyeGroup.getWorldQuaternion(_qHead).invert();
       const clampR = THREE.MathUtils.clamp;
       const maxV = THREE.MathUtils.degToRad(convergenceConfig.maxVergence);
       const extraV = crossExtra * THREE.MathUtils.degToRad(convergenceConfig.crossVergence);
@@ -2216,7 +2231,7 @@ class EyeRenderer {
         const eye = this.left || this.right;
         if (eye) {
           eye.pivot.getWorldPosition(_sL);
-          _dL.copy(faceWorld).sub(_sL).normalize();
+          _dL.copy(faceWorld).sub(_sL).normalize().applyQuaternion(_qHead);
           const yaw = clampR(Math.atan2(_dL.x, _dL.z), -maxRot * 1.4, maxRot * 1.4);
           const pitch = clampR(Math.asin(clampR(-_dL.y, -1, 1)), -maxRot * 1.4, maxRot * 1.4);
           eye.pivot.rotation.set(pitch, yaw, -yaw * pitch * listingK);
@@ -2228,8 +2243,8 @@ class EyeRenderer {
         // stay a coherent pair no matter how close or jittery the target gets.
         this.left.pivot.getWorldPosition(_sL);
         this.right.pivot.getWorldPosition(_sR);
-        _dL.copy(faceWorld).sub(_sL).normalize();
-        _dR.copy(faceWorld).sub(_sR).normalize();
+        _dL.copy(faceWorld).sub(_sL).normalize().applyQuaternion(_qHead);
+        _dR.copy(faceWorld).sub(_sR).normalize().applyQuaternion(_qHead);
         const yawL = Math.atan2(_dL.x, _dL.z), yawR = Math.atan2(_dR.x, _dR.z);
         const pitchL = Math.asin(clampR(-_dL.y, -1, 1)), pitchR = Math.asin(clampR(-_dR.y, -1, 1));
         // Clamp version and vergence SEPARATELY, then recompose — this keeps the two
@@ -2343,14 +2358,17 @@ class EyeRenderer {
           polar -= bow * Math.pow(p.taper, 1.35) * 0.30 * edgeInfluence;
         }
         // V4.8: rounded margin LIP — near v=0 the outer skin rolls over toward
-        // the globe instead of ending on a knife edge ("arêtes saillantes"),
-        // which also keeps the lid visually glued to the eyeball
+        // the globe instead of ending on a knife edge ("arêtes saillantes").
+        // V4.10: SHALLOWER roll — the first version sealed the lid-globe crevice
+        // (its radius met the contact-shadow strip), killing the dark margin line
+        // that gave the eye its contrast. The lip now rounds the edge but leaves
+        // the crevice (shadow + waterline + lash roots) visible.
         if (!isInner && !isShadow && p.taper !== undefined) {
           const roll = Math.max(0, 1 - p.v / 0.09);
           if (roll > 0) {
             const r2 = roll * roll;
-            polar += (isUpper ? 1 : -1) * r2 * 0.040 * (0.3 + 0.7 * p.taper);
-            thickR = lerp(thickR, R * 0.962, r2 * 0.85);
+            polar += (isUpper ? 1 : -1) * r2 * 0.022 * (0.3 + 0.7 * p.taper);
+            thickR = lerp(thickR, R * 0.974, r2 * 0.7);
           }
         }
 
@@ -4181,7 +4199,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig, headConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -4282,7 +4300,7 @@ async function main() {
         lash: lashConfig, heartbeat, pupilFocus: pupilFocusConfig,
         gazeCoupling, convConfig: convergenceConfig, hand: handConfig, weight: weightConfig,
         photo: photoConfig, fem: femConfig, pupilPhys: pupilPhysConfig,
-        exposure: exposureConfig,
+        exposure: exposureConfig, head: headConfig,
         personality: persona.personality,
       }));
       leftBar._saved = '✓ saved';
@@ -4390,6 +4408,14 @@ async function main() {
   gPupil.add(pupilPhysConfig, 'accomHunt').name('accom. hunting (depth)');
   gPupil.add(pupilPhysConfig, 'accomGain', 0, 15, 0.5).name('hunting gain');
   gPupil.close();
+
+  // V4.10: head orientation — gaze stays locked on the webcam target
+  const gHead = gui.addFolder('Head (v4.10)');
+  gHead.add(headConfig, 'yaw', -0.9, 0.9, 0.01).name('yaw (turn)');
+  gHead.add(headConfig, 'pitch', -0.5, 0.5, 0.01).name('pitch (nod)');
+  gHead.add(headConfig, 'sway').name('idle sway');
+  gHead.add(headConfig, 'swayAmp', 0, 0.35, 0.01).name('sway amplitude');
+  gHead.close();
 
   // V4.7: photic lid response — squint against glare, widen in darkness
   const gExpo = gui.addFolder('Light response (v4.7)');
@@ -4612,6 +4638,12 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     const cd = photoConfig.cameraDrift;
     renderer.camera.position.x = Math.sin(bt * 0.131) * 0.013 * cd;
     renderer.camera.position.y = Math.cos(bt * 0.177 + 0.8) * 0.010 * cd;
+    // V4.10: head orientation (+ optional idle sway) — the gaze compensates in
+    // setGaze, so the eyes keep looking at the tracked target while the head turns
+    const swayY = headConfig.sway ? Math.sin(bt * 0.31) * headConfig.swayAmp : 0;
+    const swayX = headConfig.sway ? Math.sin(bt * 0.23 + 1.1) * headConfig.swayAmp * 0.4 : 0;
+    renderer.eyeGroup.rotation.y = headConfig.yaw + swayY;
+    renderer.eyeGroup.rotation.x = headConfig.pitch + swayX;
 
     renderer.updateEnvVideo();
     renderer.render();
