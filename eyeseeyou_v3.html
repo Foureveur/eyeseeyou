@@ -142,6 +142,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Upper Thick</label><input type="range" id="p-lidUpperThickness" min="0" max="2" step="0.05" value="0.45"><span class="v">0.45</span></div>
   <div class="pr"><label>Lower Thick</label><input type="range" id="p-lidLowerThickness" min="0" max="2" step="0.05" value="0.45"><span class="v">0.45</span></div>
   <div class="pr"><label>Lower Ratio</label><input type="range" id="p-lidLowerRatio" min="0" max="1.0" step="0.01" value="0.40"><span class="v">0.60</span></div>
+  <div class="pr"><label>Lower Bow ^^</label><input type="range" id="p-lidLowerBow" min="0" max="1" step="0.01" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Corner Sharp</label><input type="range" id="p-lidCornerSharp" min="0.5" max="3" step="0.1" value="1.2"><span class="v">1.20</span></div>
   <div class="pr"><label>Crease Depth</label><input type="range" id="p-lidCreaseDepth" min="0" max="1" step="0.05" value="0.4"><span class="v">0.40</span></div>
   <div class="pr"><label>Lid Shadow</label><input type="range" id="p-lidShadow" min="0" max="1.0" step="0.02" value="0.30"><span class="v">0.30</span></div>
@@ -201,6 +202,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div id="emotions">
     <button class="emo-btn active" data-emo="neutral" title="Neutral">&#128528;</button>
     <button class="emo-btn" data-emo="joy" title="Joy">&#128522;</button>
+    <button class="emo-btn" data-emo="cute" title="Cute ^^">&#129392;</button>
     <button class="emo-btn" data-emo="anger" title="Anger">&#128544;</button>
     <button class="emo-btn" data-emo="fear" title="Fear">&#128552;</button>
     <button class="emo-btn" data-emo="sadness" title="Sadness">&#128546;</button>
@@ -948,14 +950,17 @@ function createShadowStripGeometry(radius, segsU, isUpper, params = {}) {
 // ============================================================
 // EMOTION PRESETS
 // ============================================================
+// V4.8: lidLowerBow — the lower margin bows UPWARD (the ^^ "banana"), strongest
+// centrally, pinned at the commissures. The signature of a genuine (Duchenne) smile.
 const EMOTIONS = {
-  neutral:  { lidOpen: 0.43, lidUpperTilt: -0.22, lidLowerTilt: -0.06, lidSlant: 0.01, pupilSize: 0.35, lidLowerRatio: 0.40, lidWidth: 1.08 },
-  joy:      { lidOpen: 0.62, lidUpperTilt: 0.06,  lidLowerTilt: 0.14,  lidSlant: 0.08, pupilSize: 0.25, lidLowerRatio: 0.38, lidWidth: 1.12 },
-  anger:    { lidOpen: 0.52, lidUpperTilt: -0.22, lidLowerTilt: 0.12,  lidSlant: -0.14, pupilSize: 0.15, lidLowerRatio: 0.32, lidWidth: 1.02 },
-  fear:     { lidOpen: 1.25, lidUpperTilt: 0.14,  lidLowerTilt: -0.1,  lidSlant: 0,    pupilSize: 0.10, lidLowerRatio: 0.12, lidWidth: 1.1 },
-  sadness:  { lidOpen: 0.58, lidUpperTilt: -0.12, lidLowerTilt: -0.04, lidSlant: 0.12, pupilSize: 0.22, lidLowerRatio: 0.18, lidWidth: 0.98 },
-  surprise: { lidOpen: 1.35, lidUpperTilt: 0.1,   lidLowerTilt: -0.14, lidSlant: 0,    pupilSize: 0.12, lidLowerRatio: 0.08, lidWidth: 1.18 },
-  contempt: { lidOpen: 0.68, lidUpperTilt: -0.06, lidLowerTilt: 0.06,  lidSlant: -0.2, pupilSize: 0.18, lidLowerRatio: 0.28, lidWidth: 0.98 },
+  neutral:  { lidOpen: 0.43, lidUpperTilt: -0.22, lidLowerTilt: -0.06, lidSlant: 0.01, pupilSize: 0.35, lidLowerRatio: 0.40, lidWidth: 1.08, lidLowerBow: 0 },
+  joy:      { lidOpen: 0.62, lidUpperTilt: 0.06,  lidLowerTilt: 0.14,  lidSlant: 0.08, pupilSize: 0.25, lidLowerRatio: 0.38, lidWidth: 1.12, lidLowerBow: 0.55 },
+  cute:     { lidOpen: 0.50, lidUpperTilt: 0.02,  lidLowerTilt: 0.10,  lidSlant: 0.06, pupilSize: 0.58, lidLowerRatio: 0.55, lidWidth: 1.10, lidLowerBow: 0.95 },
+  anger:    { lidOpen: 0.52, lidUpperTilt: -0.22, lidLowerTilt: 0.12,  lidSlant: -0.14, pupilSize: 0.15, lidLowerRatio: 0.32, lidWidth: 1.02, lidLowerBow: 0.10 },
+  fear:     { lidOpen: 1.25, lidUpperTilt: 0.14,  lidLowerTilt: -0.1,  lidSlant: 0,    pupilSize: 0.10, lidLowerRatio: 0.12, lidWidth: 1.1, lidLowerBow: 0 },
+  sadness:  { lidOpen: 0.58, lidUpperTilt: -0.12, lidLowerTilt: -0.04, lidSlant: 0.12, pupilSize: 0.22, lidLowerRatio: 0.18, lidWidth: 0.98, lidLowerBow: 0 },
+  surprise: { lidOpen: 1.35, lidUpperTilt: 0.1,   lidLowerTilt: -0.14, lidSlant: 0,    pupilSize: 0.12, lidLowerRatio: 0.08, lidWidth: 1.18, lidLowerBow: 0 },
+  contempt: { lidOpen: 0.68, lidUpperTilt: -0.06, lidLowerTilt: 0.06,  lidSlant: -0.2, pupilSize: 0.18, lidLowerRatio: 0.28, lidWidth: 0.98, lidLowerBow: 0.12 },
 };
 
 // V2.3: emotion → behavioral state mapping (unifies emoji emotions with state sliders)
@@ -963,6 +968,7 @@ const EMOTIONS = {
 const EMOTION_STATE = {
   neutral:  { curiosity: 0.5,  fatigue: 0.2,  tension: 0.3,  alertness: 0.7 },
   joy:      { curiosity: 0.75, fatigue: 0.1,  tension: 0.2,  alertness: 0.85 },
+  cute:     { curiosity: 0.6,  fatigue: 0.2,  tension: 0.05, alertness: 0.6 },
   anger:    { curiosity: 0.35, fatigue: 0.15, tension: 0.9,  alertness: 0.8 },
   fear:     { curiosity: 0.7,  fatigue: 0.15, tension: 0.95, alertness: 1.0 },
   sadness:  { curiosity: 0.2,  fatigue: 0.85, tension: 0.3,  alertness: 0.25 },
@@ -2271,7 +2277,7 @@ class EyeRenderer {
 
   // V3.11: upperAngle/lowerAngle accept either a number (both eyes) or {l, r}
   // so desynced blinks reach the geometry per eye.
-  updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops) {
+  updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops, lowerBow = 0) {
     const uaOf = (v, i) => (typeof v === 'object') ? (i === 0 ? v.l : (v.r ?? v.l)) : v;
     const eyes = cyclops ? [this.left] : [this.left, this.right];
     eyes.forEach((eye, i) => {
@@ -2281,7 +2287,7 @@ class EyeRenderer {
       const u = this.eyeUniformSets[i];
       if (u) {
         u.uLidUp.value = Math.PI / 2 - (0.36 + ua);
-        u.uLidLow.value = Math.PI / 2 + (0.36 + la);
+        u.uLidLow.value = Math.PI / 2 + (0.36 + la) - lowerBow * 0.20;
       }
       const ul = eye.lidWrap.getObjectByName('upperLid');
       const ll = eye.lidWrap.getObjectByName('lowerLid');
@@ -2291,12 +2297,12 @@ class EyeRenderer {
       const gazeDir = new THREE.Vector3(0, 0, 1);
       if (eye.pivot) gazeDir.set(0, 0, 1).applyQuaternion(eye.pivot.quaternion);
 
-      this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir);
-      this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir);
+      this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir, 0);
+      this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir, lowerBow);
     });
   }
 
-  _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir) {
+  _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir, bow = 0) {
     if (!lidGroup) return;
     lidGroup.traverse(mesh => {
       if (!mesh.isMesh) return;
@@ -2325,8 +2331,24 @@ class EyeRenderer {
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
         // The contact shadow keeps zero thickness so it hugs the globe.
         const falloff = isShadow ? 0 : (isInner || p.prof === undefined) ? (1.0 - p.v) : p.prof;
-        const thickR = R * (1.0 + thickness * thickSign * falloff);
-        const polar = p.basePolar + (isUpper ? -openShift : openShift);
+        let thickR = R * (1.0 + thickness * thickSign * falloff);
+        let polar = p.basePolar + (isUpper ? -openShift : openShift);
+        // V4.8: ^^ banana — the lower margin bows UPWARD, strongest centrally
+        // (taper^1.35 sharpens the centre bias), commissures pinned
+        if (!isUpper && bow > 0.001 && p.taper !== undefined) {
+          polar -= bow * Math.pow(p.taper, 1.35) * 0.30 * edgeInfluence;
+        }
+        // V4.8: rounded margin LIP — near v=0 the outer skin rolls over toward
+        // the globe instead of ending on a knife edge ("arêtes saillantes"),
+        // which also keeps the lid visually glued to the eyeball
+        if (!isInner && !isShadow && p.taper !== undefined) {
+          const roll = Math.max(0, 1 - p.v / 0.09);
+          if (roll > 0) {
+            const r2 = roll * roll;
+            polar += (isUpper ? 1 : -1) * r2 * 0.040 * (0.3 + 0.7 * p.taper);
+            thickR = lerp(thickR, R * 0.962, r2 * 0.85);
+          }
+        }
 
         let x = thickR * Math.sin(polar) * Math.sin(adjAzimuth);
         let y = thickR * Math.cos(polar);
@@ -2557,6 +2579,7 @@ class EyeController {
       scleraRoughness: 0.28, scleraOpacity: 1.0, envIntensity: 1.0,
       lidOpen: 0.67, lidUpperTilt: -0.22, lidLowerTilt: -0.06, lidSlant: 0.01,
       lidWidth: 1.08, lidUpperThickness: 0.45, lidLowerThickness: 0.45, lidLowerRatio: 0.40,
+      lidLowerBow: 0,   // V4.8: ^^ banana — lower margin bows upward, commissures pinned
       lidCornerSharp: 1.2, lidCreaseDepth: 0.4, lidShadow: 0.30,
       lashesShow: 1, skinTexture: 0.003,
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#a56a60',
@@ -2714,6 +2737,7 @@ class EyeController {
       lowerTilt: this._pulsed('lidLowerTilt', p.lidLowerTilt),
       slant:     this._pulsed('lidSlant', p.lidSlant),
       width:     this._pulsed('lidWidth', p.lidWidth),
+      bow:       this._pulsed('lidLowerBow', p.lidLowerBow),   // V4.8: ^^ banana
     };
   }
 
@@ -2872,6 +2896,7 @@ class EyeController {
     p.pupilSize = lr(p.pupilSize, this._emoTargets.pupilSize, el);
     p.lidLowerRatio = lr(p.lidLowerRatio, this._emoTargets.lidLowerRatio, el);
     p.lidWidth = lr(p.lidWidth, this._emoTargets.lidWidth, el);
+    p.lidLowerBow = lr(p.lidLowerBow, this._emoTargets.lidLowerBow ?? 0, el);   // V4.8: ^^
 
     // V3.5: sustained gesture moods — fist = anger, thumb/victory/ILY = joy —
     // held as an emotion pulse while the gesture lasts, released when it stops.
@@ -4020,7 +4045,7 @@ class DebugUI {
     // V2.3: if this is an emotion-controlled param, remember the user override
     // so subsequent emotion clicks compose (e.g., user-lowered lidOpen + angry emoji
     // = angry with the user's lidOpen adjustment preserved).
-    const EMO_KEYS = ['lidOpen', 'lidUpperTilt', 'lidLowerTilt', 'lidSlant', 'pupilSize', 'lidLowerRatio', 'lidWidth'];
+    const EMO_KEYS = ['lidOpen', 'lidUpperTilt', 'lidLowerTilt', 'lidSlant', 'pupilSize', 'lidLowerRatio', 'lidWidth', 'lidLowerBow'];
     if (EMO_KEYS.includes(key)) this.ctrl.recordUserOverride(key, val);
     const r = this.rend;
     switch (key) {
@@ -4208,7 +4233,7 @@ async function main() {
     const effOpen = p.lidOpen * 1.0;
     const upperAng = effOpen * 0.52 + p.lidUpperTilt;
     const lowerAng = effOpen * p.lidLowerRatio * 0.52 + p.lidLowerTilt;
-    renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, p.cyclops > 0.5);
+    renderer.updateLids(upperAng, lowerAng, p.lidSlant, p.lidWidth, p.lidUpperThickness, p.lidLowerThickness, p.cyclops > 0.5, p.lidLowerBow);
   }
   ui.init();
 
@@ -4459,7 +4484,7 @@ async function main() {
       l: ec.getBotOpennessL() * 0.52 + lidP.lowerTilt,
       r: ec.getBotOpennessR() * 0.52 + lidP.lowerTilt,
     };
-    renderer.updateLids(upperAng, lowerAng, lidP.slant, lidP.width, p.lidUpperThickness, p.lidLowerThickness, cyclops);
+    renderer.updateLids(upperAng, lowerAng, lidP.slant, lidP.width, p.lidUpperThickness, p.lidLowerThickness, cyclops, lidP.bow);
 
     // V2.1: Pupil accommodation ("mise au point") — brief constriction on saccade + depth-based offset
     if (convergenceEnabled.pupilFocus) {
