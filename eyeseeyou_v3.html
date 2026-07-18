@@ -327,7 +327,8 @@ const lashConfig = {
   thickness: 1.6,   // root width multiplier (→ mascara look)
   length: 1.1,      // length multiplier
   curl: 1.0,        // J-curl multiplier
-  clumping: 0.12,   // V4.5: drives CLUSTER separation (0 = continuous fringe, 1 = spaced tufts)
+  clumping: 0.12,   // V4.13: COHESION inside a tuft (0 = loose hairs, 1 = glued tips)
+  tuftGap: 0.12,    // V4.13.1: SPACING between tufts (0 = continuous fringe, 1 = wide gaps)
   femininity: 0.72, // V3.8: 0 = masculine (short/straight/sparse), 1 = feminine (long/curled/wispy)
   pitch: 0.55,      // V4.5: orientation — 0 = flat/forward off the margin, 1 = steeply lifted
 };
@@ -789,7 +790,9 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   // root every ~2 px: a QUASI-CONTINUOUS fringe with density variations, never
   // discrete separated tufts. Gaps halved, clusters enlarged.
   const slots = [];
-  const gapBase = lerp(0.0045, 0.022, lashConfig.clumping)
+  // V4.13.1: tuft SPACING has its own control (tuftGap) — clumping only drives
+  // the cohesion inside each tuft. They were conflated in one slider.
+  const gapBase = lerp(0.0035, 0.030, lashConfig.tuftGap ?? 0.12)
     * (3.0 / Math.max(0.5, DENS)) / fDens * (isUpper ? 1 : 1.6);
   const intraJit = lerp(0.010, 0.0045, lashConfig.clumping);
   // V4.13: CLUSTER-COHERENT hairs — a real tuft shares its length/curl/sweep and
@@ -1128,6 +1131,11 @@ const EYE_GLSL_COLOR = /* glsl */`
   float topZ = irisPlaneZ + reliefD;
   float tI = (topZ - vObjPos.z) / rd.z;
   vec2 q = (vObjPos.xy + rd.xy * max(tI, 0.0)) / irisDiscR;
+  // V4.13.1: PUPIL SHAPES are evaluated on the BASE plane (pre-relief) — the POM
+  // march distorts asymmetric masks (the heart pupil became an unrecognizable
+  // magnified blob). The relief only sculpts the iris MATTER, never the shapes.
+  float tBase = (irisPlaneZ - vObjPos.z) / rd.z;
+  vec2 qBase = (vObjPos.xy + rd.xy * max(tBase, 0.0)) / irisDiscR;
   if (reliefD > 1e-5 && win > 0.001) {
     const int PSTEP = 12;
     float dtL = (reliefD / float(PSTEP)) / max(-rd.z, 0.06);
@@ -1157,10 +1165,10 @@ const EYE_GLSL_COLOR = /* glsl */`
   // --- pupil: SDF disc, warped per shape sliders. Round by construction. ---
   float sx = 1.0 - clamp(uPupilCat * 0.78 + uPupilReptile * 0.86, 0.0, 0.92); // vertical slit
   float sy = (1.0 - clamp(uPupilGoat * 0.80, 0.0, 0.92)) * (1.0 + uPupilOval * 0.6); // bar / oval
-  float dPup = length(vec2(q.x / sx, q.y / sy));
+  float dPup = length(vec2(qBase.x / sx, qBase.y / sy));
   float pupMask = 1.0 - smoothstep(pr - 0.035, pr, dPup);
   if (uPupilHeart > 0.01) {                              // implicit heart curve
-    vec2 hq = q / max(pr * 1.4, 1e-3);
+    vec2 hq = qBase / max(pr * 1.4, 1e-3);
     float hx = hq.x, hy = -hq.y + 0.35;
     float h = pow(hx * hx + hy * hy - 1.0, 3.0) - hx * hx * hy * hy * hy;
     float heartMask = 1.0 - smoothstep(-0.08, 0.08, h);
@@ -4440,8 +4448,8 @@ async function main() {
   const rebuild = () => renderer.rebuildLashes();
   gLash.add(lashConfig, 'femininity', 0, 1, 0.02).name('♂ ← femininity → ♀').onChange(rebuild).listen();
   const lashPreset = {
-    feminine() { Object.assign(lashConfig, { femininity: 0.9, density: 3.0, length: 1.25, curl: 1.25, thickness: 1.5, clumping: 0.18, pitch: 0.65 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
-    masculine() { Object.assign(lashConfig, { femininity: 0.12, density: 1.9, length: 0.85, curl: 0.55, thickness: 1.35, clumping: 0.1, pitch: 0.42 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+    feminine() { Object.assign(lashConfig, { femininity: 0.9, density: 3.0, length: 1.25, curl: 1.25, thickness: 1.5, clumping: 0.35, tuftGap: 0.15, pitch: 0.65 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+    masculine() { Object.assign(lashConfig, { femininity: 0.12, density: 1.9, length: 0.85, curl: 0.55, thickness: 1.35, clumping: 0.12, tuftGap: 0.10, pitch: 0.42 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
   };
   gLash.add(lashPreset, 'feminine').name('♀ preset');
   gLash.add(lashPreset, 'masculine').name('♂ preset');
@@ -4449,7 +4457,8 @@ async function main() {
   gLash.add(lashConfig, 'thickness', 0.3, 4, 0.05).name('thickness (mascara)').onChange(rebuild);
   gLash.add(lashConfig, 'length', 0.3, 2.5, 0.05).name('length').onChange(rebuild);
   gLash.add(lashConfig, 'curl', 0, 2.5, 0.05).name('curl').onChange(rebuild);
-  gLash.add(lashConfig, 'clumping', 0, 1, 0.02).name('clumping (spacing)').onChange(rebuild);
+  gLash.add(lashConfig, 'clumping', 0, 1, 0.02).name('clumping (cohésion)').onChange(rebuild);
+  gLash.add(lashConfig, 'tuftGap', 0, 1, 0.02).name('écart des touffes').onChange(rebuild);   // V4.13.1
   gLash.add(lashConfig, 'pitch', 0, 1, 0.02).name('orientation (pitch)').onChange(rebuild);   // V4.5
   gLash.close();
 
