@@ -320,8 +320,9 @@ const lashConfig = {
   thickness: 1.6,   // root width multiplier (→ mascara look)
   length: 1.1,      // length multiplier
   curl: 1.0,        // J-curl multiplier
-  clumping: 0.12,   // 0 = continuous comb (roots overlap), 1 = separated tufts
+  clumping: 0.12,   // V4.5: drives CLUSTER separation (0 = continuous fringe, 1 = spaced tufts)
   femininity: 0.72, // V3.8: 0 = masculine (short/straight/sparse), 1 = feminine (long/curled/wispy)
+  pitch: 0.55,      // V4.5: orientation — 0 = flat/forward off the margin, 1 = steeply lifted
 };
 
 // V2.3: blink scheduling controls (exposed via lil-gui for fine-tuning)
@@ -716,22 +717,39 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const FEM = lashConfig.femininity;
   const fLen = lerp(0.72, 1.28, FEM), fCurl = lerp(0.55, 1.25, FEM), fDens = lerp(0.7, 1.2, FEM);
   const fanDir = isRight ? -1 : 1;
-  const nLash = Math.max(16, Math.round((isUpper ? 140 : 76) * (DENS / 3.0) * fDens));
+  const PITCH = lashConfig.pitch != null ? lashConfig.pitch : 0.55;
 
   const verts = [], norms = [], cols = [], indices = [];
   const N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
   const Root = new THREE.Vector3(), Tip = new THREE.Vector3(), Ctrl = new THREE.Vector3();
   const P = new THREE.Vector3(), Tan = new THREE.Vector3(), Ax1 = new THREE.Vector3(), Ax2 = new THREE.Vector3();
 
-  // clump attractors — neighbouring lashes share a tip offset (mascara-like gather)
-  const nClump = Math.max(3, Math.round(nLash / 6));
-  const clumps = [];
-  for (let ci = 0; ci < nClump; ci++) {
-    clumps.push({ t: (Math.random() - 0.5) * 0.5, b: (Math.random() - 0.5) * 0.6 });
+  // V4.5: CLUSTERED IMPLANTATION — real lashes grow in irregular clusters of 1–4
+  // nearly-touching hairs, with small gaps BETWEEN clusters. NOT an evenly spaced
+  // comb of isolated spikes. `clumping` drives the cluster separation; `density`
+  // tightens the walk along the margin.
+  const slots = [];
+  const gapBase = lerp(0.009, 0.028, lashConfig.clumping)
+    * (3.0 / Math.max(0.5, DENS)) / fDens * (isUpper ? 1 : 1.8);
+  const intraJit = lerp(0.010, 0.0045, lashConfig.clumping);
+  let tcWalk = 0.01 + Math.random() * 0.02;
+  while (tcWalk < 0.99) {
+    const nIn = 1 + Math.floor(Math.random() * (isUpper ? 3.3 : 2.2));
+    // the cluster shares a tip attractor — mascara-like gathered points
+    const tipT = (Math.random() - 0.5) * 0.40 * lashConfig.clumping;
+    const tipB = (Math.random() - 0.5) * 0.50 * lashConfig.clumping;
+    for (let ci = 0; ci < nIn; ci++) {
+      slots.push({
+        t: THREE.MathUtils.clamp(tcWalk + (Math.random() - 0.5) * intraJit * 2, 0, 1),
+        row: ci % 3, tipT, tipB,
+      });
+    }
+    tcWalk += gapBase * (0.7 + Math.random() * 0.6);
   }
 
-  for (let li = 0; li < nLash; li++) {
-    const tArc = THREE.MathUtils.clamp((li + 0.5) / nLash + (Math.random() - 0.5) * (0.3 / nLash), 0, 1);
+  for (let li = 0; li < slots.length; li++) {
+    const slot = slots[li];
+    const tArc = slot.t;
     // V4.2: nasal/temporal mapping was INVERTED (inherited from v3.9) — the long
     // dense "temporal" lashes were planted at the NASAL corner, crossing mid-face.
     // Geometry check: left eye (-x), tArc=0 ⇒ u=0.285 ⇒ -x side = temporal.
@@ -751,33 +769,32 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     T.set(0, sign, 0);
     B.crossVectors(N, T).normalize();
 
-    // staggered rows along the margin, like real cilia
-    const row = li % 3;
+    // V4.5: tight staggered rows RIGHT at the margin lip — the old wide scatter
+    // (rows 2× farther apart + big lateral jitter) read as random implantation
     Root.set(pos.getX(iC), pos.getY(iC), pos.getZ(iC))
-      .addScaledVector(N, -RR * 0.010)                     // planted under the surface
-      .addScaledVector(T, RR * 0.006 * row * (0.5 + Math.random()))
-      .addScaledVector(B, (Math.random() - 0.5) * RR * 0.008);
+      .addScaledVector(N, -RR * 0.014)                     // planted under the surface
+      .addScaledVector(T, RR * 0.0028 * slot.row)
+      .addScaledVector(B, (Math.random() - 0.5) * RR * 0.004);
 
-    // V4.2: strong anatomical length gradient — nasal lashes ~1/3 of temporal
-    // length (they vanish toward the punctum), peak at the centre-temporal third
-    const lenProfile = lerp(0.38, 1.18, Math.pow(temporal, 0.85)) * (0.76 + 0.24 * centre);
-    const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile * (0.84 + Math.random() * 0.32);
-    const curl = CURLM * fCurl * lerp(1.05, 0.75, temporal) * (isUpper ? 1.0 : 0.62) * (0.8 + Math.random() * 0.4);
-    const lat = fanDir * (0.04 + temporal * 0.34) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
-      + (Math.random() - 0.5) * 0.16;
+    // V4.5: softened anatomical gradient — nasal ≈ half of temporal (the old 1/3
+    // + wild randomness made giant temporal wisps), tighter length variance
+    const lenProfile = lerp(0.50, 1.10, Math.pow(temporal, 0.9)) * (0.80 + 0.20 * centre);
+    const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile * (0.88 + Math.random() * 0.24);
+    const curl = CURLM * fCurl * lerp(1.0, 0.8, temporal) * (isUpper ? 1.0 : 0.62) * (0.85 + Math.random() * 0.3);
+    const lat = fanDir * (0.03 + temporal * 0.22) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
+      + (Math.random() - 0.5) * 0.10;
 
-    const cl = clumps[Math.min(nClump - 1, Math.floor(tArc * nClump))];
-    const clT = lashConfig.clumping;
-
-    // J-curl bezier: leaves the margin along the normal, tip sweeps along +T
-    // (away from the aperture — up for the upper lid, down for the lower)
-    Ctrl.copy(Root).addScaledVector(N, L * 0.62)
-      .addScaledVector(T, L * 0.10 * curl)
+    // J-curl bezier — V4.5: user-controllable PITCH. 0 = the lash leaves flat,
+    // forward off the margin; 1 = steeply lifted along the lid tangent.
+    const pN = lerp(1.25, 0.55, PITCH);
+    const pT = lerp(0.45, 1.45, PITCH);
+    Ctrl.copy(Root).addScaledVector(N, L * 0.62 * lerp(1.1, 0.8, PITCH))
+      .addScaledVector(T, L * 0.10 * curl * pT)
       .addScaledVector(B, L * lat * 0.35);
     Tip.copy(Root)
-      .addScaledVector(N, L * Math.max(0.30, 0.88 - 0.34 * curl))
-      .addScaledVector(T, L * (0.32 + 0.55 * curl) + L * cl.t * clT * 0.35)
-      .addScaledVector(B, L * lat + L * cl.b * clT * 0.4);
+      .addScaledVector(N, L * Math.max(0.22, 0.88 - 0.34 * curl) * pN)
+      .addScaledVector(T, L * (0.30 + 0.52 * curl) * pT + L * slot.tipT)
+      .addScaledVector(B, L * lat + L * slot.tipB);
 
     const rootR = RR * 0.0032 * THK * (0.78 + Math.random() * 0.5);
     const shade = 0.8 + Math.random() * 0.45;
@@ -2117,7 +2134,13 @@ class EyeRenderer {
       // look-at singular, and tiny finger jitter then swings the eyes to opposite
       // clamped extremes (the "part en couille"). The dramatic cross-eye now comes
       // from the capped VERGENCE below, not from the target distance collapsing.
-      const faceDist = Math.max(camZ * 0.32, lerp(camZ * 1.6, camZ * 0.5, Math.min(1, faceZ)));
+      // V4.5: DYNAMIC target distance — continuous over the whole proximity range.
+      // The old lerp clamped at faceZ=1, which the depth signal hit at typical
+      // distances → the virtual target sat at a FIXED distance in everyday use
+      // and the vergence never breathed with the real target's depth.
+      const pz = THREE.MathUtils.clamp(faceZ, 0, 1.35);
+      const faceDist = Math.max(camZ * 0.32,
+        camZ * (0.36 + 1.85 * Math.pow(1 - pz / 1.35, 1.3)));
       const crossExtra = Math.max(0, faceZ - 1);   // 0..~0.35 finger-at-lens overshoot
       // V4.3: direction = angular position in the webcam frame (depth-independent);
       // depth (faceZ→faceDist) slides the target along that RAY → it only changes
@@ -2923,7 +2946,7 @@ class EyeController {
     // triad just like a close face (z clamped: the cross-eye overshoot zone >1
     // shouldn't over-drive the pupil).
     const trackDepth = (handConfig.enabled && this.hand.detected && this.hand.pointing)
-      ? Math.min(1, this.hand.z) : this.face.z;
+      ? Math.min(1, this.hand.z) : Math.min(1, this.face.z);   // V4.5: face.z is uncapped now
     const depthOffset = (trackDepth - 0.5) * pupilFocusConfig.depthAccommodationRange * 2;
     // (c) heartbeat pulse — authentic lub-dub cardiac pattern, BPM + frequency + irregularity
     let pulse = 0;
@@ -3416,7 +3439,10 @@ class FaceTracker {
       const iod = Math.hypot(ir.x - il.x, ir.y - il.y);  // inter-ocular distance ~ 1/viewer distance
       this.controller.face.x = -(cx * 2 - 1) * p.sensitivity + p.parallaxX;
       this.controller.face.y = -(cy * 2 - 1) * p.sensitivity + p.parallaxY;
-      this.controller.face.z = Math.min(1.0, iod * 6.5);
+      // V4.5: UNCAPPED depth — min(1.0, …) saturated at typical viewing distance,
+      // freezing the target distance (and thus the vergence) in everyday use.
+      // The proximity signal now stays continuous over the whole range.
+      this.controller.face.z = Math.min(1.45, iod * 6.5);
       // V3.11: scan-path features — viewer's eyes + mouth, in gaze-target coords
       // (same transform as face.x/y). lm[473]=left iris, lm[468]=right iris, lm[13]=upper lip.
       const _fx = v => -(v.x * 2 - 1) * p.sensitivity + p.parallaxX;
@@ -4179,8 +4205,8 @@ async function main() {
   const rebuild = () => renderer.rebuildLashes();
   gLash.add(lashConfig, 'femininity', 0, 1, 0.02).name('♂ ← femininity → ♀').onChange(rebuild).listen();
   const lashPreset = {
-    feminine() { Object.assign(lashConfig, { femininity: 0.9, density: 3.0, length: 1.25, curl: 1.25, thickness: 1.5, clumping: 0.18 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
-    masculine() { Object.assign(lashConfig, { femininity: 0.12, density: 1.9, length: 0.85, curl: 0.55, thickness: 1.35, clumping: 0.1 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+    feminine() { Object.assign(lashConfig, { femininity: 0.9, density: 3.0, length: 1.25, curl: 1.25, thickness: 1.5, clumping: 0.18, pitch: 0.65 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
+    masculine() { Object.assign(lashConfig, { femininity: 0.12, density: 1.9, length: 0.85, curl: 0.55, thickness: 1.35, clumping: 0.1, pitch: 0.42 }); rebuild(); gLash.controllers.forEach(c => c.updateDisplay()); },
   };
   gLash.add(lashPreset, 'feminine').name('♀ preset');
   gLash.add(lashPreset, 'masculine').name('♂ preset');
@@ -4189,6 +4215,7 @@ async function main() {
   gLash.add(lashConfig, 'length', 0.3, 2.5, 0.05).name('length').onChange(rebuild);
   gLash.add(lashConfig, 'curl', 0, 2.5, 0.05).name('curl').onChange(rebuild);
   gLash.add(lashConfig, 'clumping', 0, 1, 0.02).name('clumping (spacing)').onChange(rebuild);
+  gLash.add(lashConfig, 'pitch', 0, 1, 0.02).name('orientation (pitch)').onChange(rebuild);   // V4.5
   gLash.close();
 
   const gConv = gui.addFolder('Per-eye tracking');
