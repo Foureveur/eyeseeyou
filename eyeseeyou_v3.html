@@ -395,7 +395,10 @@ const handConfig = {
   zGain: 5.0,          // apparent hand size → depth (higher = crosses sooner)
   crossMax: 1.35,      // targetZ ceiling when the finger touches the lens (>1 = full cross-eye)
   flinchSpeed: 1.6,    // approach speed (z-units/s) that startles the eye
-  holdMs: 350,         // grace period after the hand vanishes before falling back to face
+  holdMs: 900,         // V4.2: 350 → 900 — MediaPipe often DROPS the hand when it
+                       // crosses in front of the face (skin-on-skin background);
+                       // the short grace made the finger lose priority in a whole
+                       // zone around the head. Longer hold rides out the dropouts.
   smoothing: 0.3,      // V3.6: fingertip filter base blend (lower = calmer, One-Euro-lite)
 };
 
@@ -691,7 +694,7 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   const FEM = lashConfig.femininity;
   const fLen = lerp(0.72, 1.28, FEM), fCurl = lerp(0.55, 1.25, FEM), fDens = lerp(0.7, 1.2, FEM);
   const fanDir = isRight ? -1 : 1;
-  const nLash = Math.max(16, Math.round((isUpper ? 110 : 62) * (DENS / 3.0) * fDens));
+  const nLash = Math.max(16, Math.round((isUpper ? 140 : 76) * (DENS / 3.0) * fDens));
 
   const verts = [], norms = [], cols = [], indices = [];
   const N = new THREE.Vector3(), T = new THREE.Vector3(), B = new THREE.Vector3();
@@ -706,11 +709,19 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   }
 
   for (let li = 0; li < nLash; li++) {
-    const tArc = THREE.MathUtils.clamp((li + 0.5) / nLash + (Math.random() - 0.5) * (0.4 / nLash), 0, 1);
-    const nasal = isRight ? tArc : (1.0 - tArc);
+    const tArc = THREE.MathUtils.clamp((li + 0.5) / nLash + (Math.random() - 0.5) * (0.3 / nLash), 0, 1);
+    // V4.2: nasal/temporal mapping was INVERTED (inherited from v3.9) — the long
+    // dense "temporal" lashes were planted at the NASAL corner, crossing mid-face.
+    // Geometry check: left eye (-x), tArc=0 ⇒ u=0.285 ⇒ -x side = temporal.
+    const nasal = isRight ? (1.0 - tArc) : tArc;
     const temporal = 1.0 - nasal;
     const centre = Math.pow(Math.sin(tArc * Math.PI), 0.42);
-    if (centre < 0.10 || Math.random() > 0.35 + centre) continue;   // thin out at canthi
+    if (centre < 0.06) continue;
+    // V4.2: anatomical density gradient — continuous fringe centrally, thinning
+    // toward both canthi and MUCH sparser nasally (no more random 40% deletion
+    // that punched absurd gaps in the middle of the lash line)
+    const keepP = Math.min(1, Math.pow(centre, 0.6) * 1.4) * lerp(0.60, 1.0, temporal);
+    if (Math.random() > keepP) continue;
 
     const tC = startFrac + tArc * arcSpan;
     const iC = Math.max(0, Math.min(segsU, Math.round(tC * segsU)));
@@ -725,8 +736,10 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       .addScaledVector(T, RR * 0.006 * row * (0.5 + Math.random()))
       .addScaledVector(B, (Math.random() - 0.5) * RR * 0.008);
 
-    const lenProfile = lerp(0.62, 1.20, temporal) * (0.82 + 0.18 * centre);
-    const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile * (0.78 + Math.random() * 0.44);
+    // V4.2: strong anatomical length gradient — nasal lashes ~1/3 of temporal
+    // length (they vanish toward the punctum), peak at the centre-temporal third
+    const lenProfile = lerp(0.38, 1.18, Math.pow(temporal, 0.85)) * (0.76 + 0.24 * centre);
+    const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile * (0.84 + Math.random() * 0.32);
     const curl = CURLM * fCurl * lerp(1.05, 0.75, temporal) * (isUpper ? 1.0 : 0.62) * (0.8 + Math.random() * 0.4);
     const lat = fanDir * (0.04 + temporal * 0.34) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
       + (Math.random() - 0.5) * 0.16;
@@ -3478,8 +3491,11 @@ class FaceTracker {
     // V3.6: hysteresis — the raw pose flickers at borderline finger angles; engage
     // after 2 consecutive ticks, release after 4, so the gaze doesn't flip
     // between fingertip and face several times a second.
-    if (pointingRaw) { this._pointOn = Math.min(9, this._pointOn + 1); this._pointOff = 0; }
-    else if (++this._pointOff >= 4) this._pointOn = 0;
+    // V4.2: release raised 4 → 10 ticks (~660 ms) — the pose test flickers hard
+    // while the hand crosses the face; releasing fast dropped the finger lock
+    // exactly where the user expects it to hold.
+    if (pointingRaw) { this._pointOn = Math.min(12, this._pointOn + 1); this._pointOff = 0; }
+    else if (++this._pointOff >= 10) this._pointOn = 0;
     const pointing = this._pointOn >= 2;
     // V3.5: 🖕 — middle extended alone → contempt + ostensible look-away
     const rude = handConfig.reactions && ext(12, 10) && !ext(8, 6) && !ext(16, 14) && !ext(20, 18);
