@@ -291,8 +291,15 @@ const cameraDisplay = {
 // V2.5+V2.7: per-eye tracking tunables (ad-hoc proportions of the oversized eye rig)
 const convergenceConfig = {
   targetDistance: 5.0,    // base distance to the gaze target (~ camera.position.z = 5)
-  lateralScale: 4.0,      // how far the target can shift laterally (world units)
-  verticalScale: 4.0,     // vertical shift — boosted for visibility (was 2.5, too subtle)
+  // V4.3: DEPTH-CORRECT GAZE MODEL. The webcam sits in the same plane as the
+  // rendered eyes, so a target's DIRECTION from the eyes equals its angular
+  // position in the webcam frame — independent of its depth. Depth only slides
+  // the target along that ray (→ vergence + pupil accommodation). gazeTanX/Y is
+  // the tan(half-FOV) of that angular mapping. The old model (fixed ±4-unit
+  // lateral offset + depth-varying z) made the DIRECTION swing with depth: a
+  // close finger bottom-left sent the eyes far past it.
+  gazeTanX: 0.80,
+  gazeTanY: 0.80,
   // V3.7: binocular regularisation. The eyes are decomposed into a shared VERSION
   // (common gaze direction — both eyes always move together) plus a symmetric,
   // capped VERGENCE (how far they cross). This is the physiological version/vergence
@@ -2093,10 +2100,15 @@ class EyeRenderer {
       // from the capped VERGENCE below, not from the target distance collapsing.
       const faceDist = Math.max(camZ * 0.32, lerp(camZ * 1.6, camZ * 0.5, Math.min(1, faceZ)));
       const crossExtra = Math.max(0, faceZ - 1);   // 0..~0.35 finger-at-lens overshoot
-      const trackingScaleX = convergenceConfig.lateralScale;
-      const trackingScaleY = convergenceConfig.verticalScale;
-      // V2.7: face.y is already positive when user looks UP (see FaceTracker.loop).
-      const faceWorld = new THREE.Vector3(gx * trackingScaleX, gy * trackingScaleY, faceDist);
+      // V4.3: direction = angular position in the webcam frame (depth-independent);
+      // depth (faceZ→faceDist) slides the target along that RAY → it only changes
+      // vergence and accommodation, never where the eyes point. This is what makes
+      // "the eyes look AT my finger" instead of past it.
+      const faceWorld = new THREE.Vector3(
+        gx * convergenceConfig.gazeTanX,
+        gy * convergenceConfig.gazeTanY,
+        1,
+      ).normalize().multiplyScalar(faceDist);
       if (this._targetMarker) this._targetMarker.position.copy(faceWorld);
 
       const _sL = new THREE.Vector3(), _sR = new THREE.Vector3();
@@ -4163,8 +4175,8 @@ async function main() {
     if (renderer._targetMarker) renderer._targetMarker.visible = v;
   });
   gConv.add(convergenceConfig, 'targetDistance', -20, 20, 0.5).name('target distance');
-  gConv.add(convergenceConfig, 'lateralScale', -15, 15, 0.5).name('lateral scale');
-  gConv.add(convergenceConfig, 'verticalScale', -10, 10, 0.5).name('vertical scale');
+  gConv.add(convergenceConfig, 'gazeTanX', 0.1, 2.5, 0.05).name('direction gain X');
+  gConv.add(convergenceConfig, 'gazeTanY', 0.1, 2.5, 0.05).name('direction gain Y');
   gConv.add(convergenceConfig, 'maxVergence', 0, 45, 1).name('max cross (°)');
   gConv.add(convergenceConfig, 'crossVergence', 0, 40, 1).name('finger cross (°)');
   gConv.add(gazeCoupling, 'topCoef', 0, 1.5, 0.01).name('lid coupling TOP');
