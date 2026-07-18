@@ -654,7 +654,14 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       const b = a + 1;
       const c = a + (segsU + 1);
       const d = c + 1;
-      indices.push(a, b, c, b, d, c);
+      // V4.7.1: REVERSED winding for the lower lid — its outer surface used to
+      // face away from the camera (culled), so the visible face was the inner
+      // BackSide mesh whose normals three.js FLIPS → lit from inside the globe
+      // → the washed-out cream dome ("démarcation blanche"). With the correct
+      // winding the OUTER mesh (real skin shader, real normals) faces the camera,
+      // exactly like the upper lid.
+      if (isUpper) indices.push(a, b, c, b, d, c);
+      else indices.push(a, c, b, b, c, d);
     }
   }
 
@@ -2298,15 +2305,12 @@ class EyeRenderer {
       if (!vp) return; // edge strip has no vertParams, skip displacement
       const R = geo.userData.radius;
       const pos = geo.getAttribute('position');
-      // Outer inflates outward, inner deflates inward for visible edge thickness
+      // Outer inflates outward, inner deflates inward for visible edge thickness.
+      // V4.7.1: the winding fix makes the lower lid's OUTER mesh the visible face
+      // (correct normals + skin shader) — the v4.6 draped-inner hack is obsolete.
       const isInner = mesh.name === 'inner';
       const isShadow = mesh.name === 'shadow';
-      // V4.6: the LOWER lid's visible face is the inner (BackSide) mesh — give it
-      // the same draped skin profile as the upper lid's outer surface, pushed
-      // OUTWARD. The old smooth deflated dish read as a different, plastic
-      // material ("la paupière du bas n'a pas la même matérialité").
-      const drapedInner = isInner && !isUpper;
-      const thickSign = isInner ? (drapedInner ? 0.055 : -0.04) : 0.07;
+      const thickSign = isInner ? -0.04 : 0.07;
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
@@ -2320,9 +2324,7 @@ class EyeRenderer {
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
         // The contact shadow keeps zero thickness so it hugs the globe.
-        const falloff = isShadow ? 0
-          : (p.prof !== undefined && (!isInner || drapedInner)) ? p.prof
-          : (1.0 - p.v);
+        const falloff = isShadow ? 0 : (isInner || p.prof === undefined) ? (1.0 - p.v) : p.prof;
         const thickR = R * (1.0 + thickness * thickSign * falloff);
         const polar = p.basePolar + (isUpper ? -openShift : openShift);
 
