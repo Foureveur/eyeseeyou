@@ -151,8 +151,8 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Lid Shadow</label><input type="range" id="p-lidShadow" min="0" max="1.0" step="0.02" value="0.5"><span class="v">0.50</span></div>
   <div class="pr"><label>Skin Color</label><input type="color" id="p-lidSkinColor" value="#c4956a"><span class="v"></span></div>
   <div class="pr"><label>Lower Color</label><input type="color" id="p-lidLowerColor" value="#c4956a"><span class="v"></span></div>
-  <div class="pr"><label>Edge Color</label><input type="color" id="p-lidEdgeColor" value="#a56a60"><span class="v"></span></div>
-  <div class="pr"><label>Waterline</label><input type="range" id="p-lidEdgeShow" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
+  <div class="pr"><label>Edge Color</label><input type="color" id="p-lidEdgeColor" value="#53332e"><span class="v"></span></div>
+  <div class="pr"><label>Waterline</label><input type="range" id="p-lidEdgeShow" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
   <div class="pr"><label>Outer Angle</label><input type="range" id="p-lidOuterAngle" min="-0.3" max="0.3" step="0.01" value="0.08"><span class="v">0.08</span></div>
   <div class="pr"><label>Lid Roughness</label><input type="range" id="p-lidRoughness" min="0" max="1" step="0.01" value="0.65"><span class="v">0.65</span></div>
   <div class="pr"><label>Lid Sheen</label><input type="range" id="p-lidSheen" min="0" max="1" step="0.01" value="1.0"><span class="v">1.00</span></div>
@@ -1775,34 +1775,14 @@ class EyeRenderer {
       bumpMap: this._skinBumpTex, bumpScale: 0.0015,
       side: THREE.BackSide, depthWrite: true, depthTest: true,
     });
-    // Waterline: wet mucosal edge — low roughness + clearcoat = tear-meniscus glint
-    // V4.13: juicier gloss; the flesh variation comes from applyWaterlineShader
+    // Waterline / tranche — V4.15.1: le look "muqueuse rose glossy" (v4.13) est
+    // retiré : la tranche est un liseré SOMBRE légèrement humide, c'est lui qui
+    // donne le contraste de la fissure (feedback utilisateur, réf macro).
     const edgeMat = new THREE.MeshPhysicalMaterial({
-      color: 0xa56a60, roughness: 0.18, metalness: 0.0,
-      clearcoat: 1.0, clearcoatRoughness: 0.08,
+      color: 0x53332e, roughness: 0.35, metalness: 0.0,
+      clearcoat: 0.5, clearcoatRoughness: 0.25,
       side: THREE.DoubleSide, depthWrite: true, depthTest: true,
     });
-    // V4.13: waterline MATERIALITY — real wet mucosa is never a flat geometric
-    // band: fleshy mottling, redder pockets, darkening toward the commissures.
-    const applyWaterlineShader = (mat) => {
-      mat.customProgramCacheKey = () => 'v4-waterline';
-      mat.onBeforeCompile = (shader) => {
-        shader.vertexShader = shader.vertexShader
-          .replace('#include <common>', '#include <common>\nvarying vec3 vWPos;')
-          .replace('#include <begin_vertex>', '#include <begin_vertex>\nvWPos = position;');
-        shader.fragmentShader = shader.fragmentShader
-          .replace('#include <common>', `#include <common>\nvarying vec3 vWPos;\n${EYE_GLSL_NOISE}`)
-          .replace('#include <color_fragment>', `#include <color_fragment>
-{
-  float az = atan(vWPos.x + 1e-6, vWPos.z + 1e-6);
-  float mott = eyeFbm(vec2(az * 14.0, vWPos.y * 30.0));
-  diffuseColor.rgb *= 0.88 + 0.24 * mott;                                      // fleshy mottling
-  diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.10, 0.82, 0.80), mott * 0.5);
-  float canthi = smoothstep(0.75, 1.30, abs(az));
-  diffuseColor.rgb *= 1.0 - canthi * 0.35;                                     // darker corners
-}`);
-      };
-    };
 
     const lidWrap = new THREE.Group();
     lidWrap.name = 'lidWrap';
@@ -1847,7 +1827,6 @@ class EyeRenderer {
       // Edge strip (waterline thickness)
       const eGeo = createLidEdgeStrip(outerGeo, innerGeo, segsU);
       const eMat = edgeMat.clone();
-      applyWaterlineShader(eMat);   // V4.13: clone() drops onBeforeCompile — apply per instance
       const edgeMesh = new THREE.Mesh(eGeo, eMat);
       edgeMesh.name = 'edge';
       edgeMesh.renderOrder = 3;
@@ -2716,9 +2695,9 @@ class EyeController {
       lidLowerBow: 0,   // V4.8: ^^ banana — lower margin bows upward, commissures pinned
       lidCornerSharp: 0.95, lidCreaseDepth: 0.4, lidShadow: 0.5,
       lashesShow: 1, skinTexture: 0.003,
-      lidEdgeShow: 0,   // V4.15: waterline strips ("tranches") OFF by default — the
-                        // pink band hurt the scene; the dark crevice reads better
-      lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#a56a60',
+      lidEdgeShow: 1,   // V4.15.1: tranches VISIBLES (mal lu la demande) — c'est le
+                        // liseré sombre qui contraste ; seul le look muqueuse rose dégage
+      lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#53332e',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
       // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
       // 1.15/1.80 gave two colossal touching globes. Smaller, properly spaced.
