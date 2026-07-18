@@ -938,7 +938,9 @@ ${EYE_GLSL_NOISE}
 float irisH(vec2 q, float pr) {
   float r = length(q);
   if (r > 1.12) return 0.0;
-  float th = atan(q.y, q.x) / 6.2831853 + 0.5;
+  // epsilon: atan(0,0) is UNDEFINED in GLSL — NaN on some GPUs → giant black
+  // flickering blocks once the bloom mips smear it. Never call it bare.
+  float th = atan(q.y + 1e-6, q.x + 1e-6) / 6.2831853 + 0.5;
   float rT = 0.30 + (r - pr) * 0.70 / max(1.0 - pr, 1e-3);
   float coll = 0.46;
   float h = smoothstep(pr - 0.02, coll + 0.28, r) * 0.62;                     // rising bowl
@@ -1001,7 +1003,7 @@ const EYE_GLSL_COLOR = /* glsl */`
     }
   }
   float rr = length(q);
-  float th = atan(q.y, q.x);
+  float th = atan(q.y + 1e-6, q.x + 1e-6);               // epsilon: atan(0,0) = NaN on some GPUs
   float thN = th / 6.2831853 + 0.5;                      // 0..1 around
   // tissue-space radius: the fibre pattern COMPRESSES with the pupil instead of
   // being cropped by it (a hole opening over a frozen print was the old tell)
@@ -1069,7 +1071,7 @@ const EYE_GLSL_COLOR = /* glsl */`
   irisCol = mix(irisCol, vec3(0.012, 0.008, 0.006), pupMask);  // pupil
 
   // --- procedural sclera: warm tint, capillary blush, radiating veins ---
-  float phiN = atan(dirN.y, dirN.x) / 6.2831853 + 0.5;
+  float phiN = atan(dirN.y + 1e-6, dirN.x + 1e-6) / 6.2831853 + 0.5;
   float veinField = eyeFbmP(vec2(phiN * 36.0, ang * 2.2), 36.0);
   float veins = pow(1.0 - abs(2.0 * veinField - 1.0), 10.0);
   float veinVis = smoothstep(irisAng + 0.06, irisAng + 0.75, ang) * uVeins;
@@ -1270,8 +1272,26 @@ class EyeRenderer {
           gl_FragColor = c;
         }`,
     };
+    // NaN/Inf scrub BEFORE bloom — a single bad pixel (undefined GPU math, e.g.
+    // atan(0,0)) otherwise smears into giant flickering black blocks through the
+    // bloom mip chain. NaN fails every comparison, so !(c <= big) catches it.
+    const NanScrubShader = {
+      uniforms: { tDiffuse: { value: null } },
+      vertexShader: /* glsl */`
+        varying vec2 vUv;
+        void main() { vUv = uv; gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0); }`,
+      fragmentShader: /* glsl */`
+        uniform sampler2D tDiffuse;
+        varying vec2 vUv;
+        void main() {
+          vec4 c = texture2D(tDiffuse, vUv);
+          if (!(c.r <= 1e30) || !(c.g <= 1e30) || !(c.b <= 1e30)) c = vec4(0.0, 0.0, 0.0, 1.0);
+          gl_FragColor = clamp(c, vec4(0.0), vec4(64.0));
+        }`,
+    };
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
+    this.composer.addPass(new ShaderPass(NanScrubShader));
     this._bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), photoConfig.bloom, 0.5, 0.88);
     this.composer.addPass(this._bloomPass);
     this.composer.addPass(new OutputPass());
