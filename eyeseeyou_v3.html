@@ -660,15 +660,16 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       // Normal = outward from sphere center
       const len = Math.sqrt(x * x + y * y + z * z) || 1;
       normals.push(x / len, y / len, z / len);
-      uvs.push(u, v);
-      // V3: thickness profile — tarsal margin ridge, mid hollow, fold bulge
-      // V4.12: evaluated at vp = v scaled by creaseDepth — the fold slides toward
-      // the margin when creaseDepth shrinks, coverage stays full
+      // V4.12.1: vp = FISSURE-relative coordinate (v scaled by creaseDepth).
+      // v4.12 left UVs/AO/roll in pole-space, which dilated every skin shading
+      // zone (washed lids, margin roll ×2.5 too wide). Everything now reads vp —
+      // exact pre-v4.12 look, full-pole coverage kept.
       const vp = Math.min(1.2, v * profScale);
+      uvs.push(u, Math.min(1, vp));
       const profMargin = Math.exp(-Math.pow(vp / 0.16, 2));
       const profHollow = -0.18 * Math.exp(-Math.pow((vp - 0.45) / 0.22, 2));
       const profFold = 0.30 * Math.exp(-Math.pow((vp - 0.86) / 0.18, 2));
-      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold });
+      vertParams.push({ u, v, vp: Math.min(1, vp), basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold });
     }
   }
 
@@ -695,13 +696,14 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
     const v = j / segsV;
     for (let i = 0; i <= segsU; i++) {
       const u = i / segsU;
-      const creaseAO = 1.0 - v * v * 0.5;
+      const vpA = Math.min(1, v * profScale);            // V4.12.1: fissure-relative
+      const creaseAO = 1.0 - vpA * vpA * 0.5;
       // V4.12: AO uses the SAME fissure taper as the geometry — the old full-arc
       // sin(u·π) left a shading step at the commissures (visible demarcation)
       const az2 = (-0.5 + u) * Math.PI * 2;
       const taperAO = Math.abs(az2) < FISSURE_A
         ? Math.pow(Math.sin(((az2 + FISSURE_A) / (2 * FISSURE_A)) * Math.PI), 1.2) : 0;
-      const edgeAO = 1.0 - (1.0 - v) * taperAO * 0.3; // darker near edge where lid opens
+      const edgeAO = 1.0 - (1.0 - vpA) * taperAO * 0.3; // darker near edge where lid opens
       const ao = creaseAO * edgeAO;
       const idx = (j * (segsU + 1) + i) * 3;
       colors[idx] = ao; colors[idx + 1] = ao; colors[idx + 2] = ao;
@@ -1232,7 +1234,9 @@ const EYE_GLSL_COLOR = /* glsl */`
 const EYE_GLSL_ROUGH = /* glsl */`
 #include <roughnessmap_fragment>
 // V3.11: wet/dry zoning — exposed aperture = glossy tear film, under-lid = matte
-roughnessFactor = mix(min(roughnessFactor + 0.32, 1.0), roughnessFactor * 0.32, gWet);
+// V4.12.1: wet gloss SOFTENED — near-mirror sclera reflected the softbox as big
+// white sheets top and bottom of the globe ("ombre blanche")
+roughnessFactor = mix(min(roughnessFactor + 0.28, 1.0), max(roughnessFactor * 0.55, 0.15), gWet);
 roughnessFactor = mix(roughnessFactor, uIrisRough, gEyeIrisMask);
 `;
 
@@ -2351,7 +2355,9 @@ class EyeRenderer {
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
-        const edgeInfluence = 1.0 - p.v * 0.6;
+        // V4.12.1: fissure-relative influence — pole-space v flattened the falloff
+        const pv = p.vp !== undefined ? p.vp : p.v;
+        const edgeInfluence = 1.0 - pv * 0.6;
         // V4.4: MUSCLE-PROFILE aperture — the opening displacement is scaled by
         // the fissure taper, so the commissures stay pinned and the lid opens/
         // closes like a zipper from the corners (orbicularis/levator activation),
@@ -2380,7 +2386,8 @@ class EyeRenderer {
         // that gave the eye its contrast. The lip now rounds the edge but leaves
         // the crevice (shadow + waterline + lash roots) visible.
         if (!isInner && !isShadow && p.taper !== undefined) {
-          const roll = Math.max(0, 1 - p.v / 0.09);
+          const roll = Math.max(0, 1 - pv / 0.09);   // V4.12.1: fissure-relative (the
+                                                     // pole-space roll was 2.5× too wide)
           if (roll > 0) {
             const r2 = roll * roll * tGate;   // V4.12: no lip beyond the commissures
             polar += (isUpper ? 1 : -1) * r2 * 0.022 * (0.3 + 0.7 * p.taper);
