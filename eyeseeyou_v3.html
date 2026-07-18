@@ -471,6 +471,9 @@ class SourceSensor {
 
 const IS_MOBILE = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent) || (navigator.maxTouchPoints > 0 && innerWidth < 1024);
 const R = 0.65;
+// V4.6: lid tessellation — 64×12 showed polygonal bumps along the fissure at hero
+// scale. Single shared constant used by builders, rebuilds, edge strips and lashes.
+const LID_SEGS = { u: IS_MOBILE ? 32 : 96, v: 16 };
 
 // V3: accessibility — reduced motion collapses the high-frequency vitals to a calm,
 // predictable presence (PRODUCT.md). Applied after localStorage restore so it wins.
@@ -728,13 +731,16 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   // nearly-touching hairs, with small gaps BETWEEN clusters. NOT an evenly spaced
   // comb of isolated spikes. `clumping` drives the cluster separation; `density`
   // tightens the walk along the margin.
+  // V4.6: real lash-line density is 2–4 hairs per mm — at hero scale that means a
+  // root every ~2 px: a QUASI-CONTINUOUS fringe with density variations, never
+  // discrete separated tufts. Gaps halved, clusters enlarged.
   const slots = [];
-  const gapBase = lerp(0.009, 0.028, lashConfig.clumping)
-    * (3.0 / Math.max(0.5, DENS)) / fDens * (isUpper ? 1 : 1.8);
+  const gapBase = lerp(0.0045, 0.022, lashConfig.clumping)
+    * (3.0 / Math.max(0.5, DENS)) / fDens * (isUpper ? 1 : 1.6);
   const intraJit = lerp(0.010, 0.0045, lashConfig.clumping);
   let tcWalk = 0.01 + Math.random() * 0.02;
   while (tcWalk < 0.99) {
-    const nIn = 1 + Math.floor(Math.random() * (isUpper ? 3.3 : 2.2));
+    const nIn = (isUpper ? 2 : 1) + Math.floor(Math.random() * 2.4);
     // the cluster shares a tip attractor — mascara-like gathered points
     const tipT = (Math.random() - 0.5) * 0.40 * lashConfig.clumping;
     const tipB = (Math.random() - 0.5) * 0.50 * lashConfig.clumping;
@@ -1630,8 +1636,8 @@ class EyeRenderer {
 
     // --- Procedural almond eyelids ---
     const lidR = Reye * 1.05;
-    const segsU = IS_MOBILE ? 32 : 64;
-    const segsV = 12;
+    const segsU = LID_SEGS.u;
+    const segsV = LID_SEGS.v;
     const lidParams = { cornerSharp: 1.2, outerAngle: isRight ? -0.08 : 0.08, creaseDepth: 1.0 };
 
     if (!this._skinBumpTex) this._skinBumpTex = generateSkinBumpTexture();
@@ -1885,20 +1891,29 @@ class EyeRenderer {
   setSocketOpacity(v) { if (this._socketMats) this._socketMats.forEach(m => { m.opacity = v; m.visible = v > 0.01; }); }
   rebuildLashes() {
     // Live rebuild from lashConfig — lets the user tune density/thickness at full res.
-    const segsU = IS_MOBILE ? 32 : 64;
+    // V4.6: roots are sampled from a PRISTINE rest-pose lid geometry. The old code
+    // sampled the LIVE outer geometry — whose vertices are displaced every frame by
+    // the current aperture — then re-applied the aperture rotation on top: each
+    // rebuild planted the implantation higher (it drifted with every slider touch).
+    const segsU = LID_SEGS.u;
+    const params = this._lidParams || {};
     const eyes = [this.left, this.right];
     for (let idx = 0; idx < eyes.length; idx++) {
       const eye = eyes[idx];
       if (!eye) continue;
       const isRight = idx === 1;
+      const eyeParams = { ...params };
+      if (isRight) eyeParams.outerAngle = -(eyeParams.outerAngle || 0);
       for (const isUpper of [true, false]) {
         const grp = eye.lidWrap.getObjectByName(isUpper ? 'upperLid' : 'lowerLid');
         if (!grp) continue;
         const outer = grp.getObjectByName('outer');
         const lashes = grp.getObjectByName('lashes');
         if (!outer || !lashes) continue;
+        const restGeo = createAlmondLidGeometry(outer.geometry.userData.radius, segsU, LID_SEGS.v, isUpper, eyeParams);
         const savedRot = lashes.rotation.x;
-        const newGeo = createLashGeometry(outer.geometry, segsU, isUpper, isUpper ? 130 : 78, isRight);
+        const newGeo = createLashGeometry(restGeo, segsU, isUpper, isUpper ? 130 : 78, isRight);
+        restGeo.dispose();
         lashes.geometry.dispose();
         lashes.geometry = newGeo;
         lashes.rotation.x = savedRot;
@@ -2044,8 +2059,8 @@ class EyeRenderer {
 
   _rebuildLidGeometries() {
     const params = this._lidParams;
-    const segsU = IS_MOBILE ? 32 : 64;
-    const segsV = 12;
+    const segsU = LID_SEGS.u;
+    const segsV = LID_SEGS.v;
     const eyes = [this.left, this.right];
     for (let idx = 0; idx < eyes.length; idx++) {
       const eye = eyes[idx];
@@ -2268,7 +2283,12 @@ class EyeRenderer {
       // Outer inflates outward, inner deflates inward for visible edge thickness
       const isInner = mesh.name === 'inner';
       const isShadow = mesh.name === 'shadow';
-      const thickSign = isInner ? -0.04 : 0.07;
+      // V4.6: the LOWER lid's visible face is the inner (BackSide) mesh — give it
+      // the same draped skin profile as the upper lid's outer surface, pushed
+      // OUTWARD. The old smooth deflated dish read as a different, plastic
+      // material ("la paupière du bas n'a pas la même matérialité").
+      const drapedInner = isInner && !isUpper;
+      const thickSign = isInner ? (drapedInner ? 0.055 : -0.04) : 0.07;
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
@@ -2282,7 +2302,9 @@ class EyeRenderer {
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
         // The contact shadow keeps zero thickness so it hugs the globe.
-        const falloff = isShadow ? 0 : (isInner || p.prof === undefined) ? (1.0 - p.v) : p.prof;
+        const falloff = isShadow ? 0
+          : (p.prof !== undefined && (!isInner || drapedInner)) ? p.prof
+          : (1.0 - p.v);
         const thickR = R * (1.0 + thickness * thickSign * falloff);
         const polar = p.basePolar + (isUpper ? -openShift : openShift);
 
@@ -2319,7 +2341,7 @@ class EyeRenderer {
       const oPos = outer.geometry.getAttribute('position');
       const iPos = inner.geometry.getAttribute('position');
       const ePos = edge.geometry.getAttribute('position');
-      const segsU = oPos.count / (12 + 1) - 1; // reconstruct from vertex count
+      const segsU = oPos.count / (LID_SEGS.v + 1) - 1; // reconstruct from vertex count
       // Edge strip has (segsU+1)*2 vertices: alternating outer[i], inner[i]
       const edgeCount = ePos.count / 2;
       for (let i = 0; i < edgeCount; i++) {
