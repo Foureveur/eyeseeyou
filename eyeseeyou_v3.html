@@ -2217,10 +2217,11 @@ class EyeRenderer {
         let y = thickR * Math.cos(polar);
         let z = thickR * Math.sin(polar) * Math.cos(adjAzimuth);
 
-        // Gaze bulge
+        // Gaze bulge — V4.0.2: strengthened so the lid visibly wraps OVER the
+        // protruding cornea instead of letting it poke through
         const len = Math.sqrt(x * x + y * y + z * z) || 1;
         const dot = (x * gazeDir.x + y * gazeDir.y + z * gazeDir.z) / len;
-        const bulge = Math.max(0, dot - 0.6) * 0.04;
+        const bulge = Math.max(0, dot - 0.6) * 0.065;
         x *= (1 + bulge);
         y *= (1 + bulge);
         z *= (1 + bulge);
@@ -2430,7 +2431,9 @@ class EyeController {
       pupilSize: 0.35,
       irisColorTint: '#ffffff', irisRoughness: 0.45, irisDepth: 0.08, irisParallax: 1.0,
       irisColorA: '#b07830', irisColorB: '#5a3214', irisAngle: 0.55, irisFibers: 0.65, irisRelief: 0.55,
-      corneaBulge: 0.8,   // V4.0: real corneal protrusion by default (profile + catchlight)
+      corneaBulge: 0.35,  // V4.0.2: 0.8 poked THROUGH the lids (transparent lower lid —
+                          // the transmission shell drew the iris over the skin). 0.35 keeps
+                          // the profile inside the lid radius (1.023r < 1.034r inner lid).
       irisTexMix: 0, limbusDark: 0.55, veins: 0.5, meniscus: 0.5, scleraTint: '#f4ece2',
       browHeight: 0, browThickness: 1.0, browShow: 0,
       lid3d: 1,
@@ -3030,6 +3033,10 @@ class EyeController {
     }
     if (this._gazeMode === 'continuous') {
       if (f.detected) {
+        // V4.0.2: ✋ freeze = breath-hold — the fixation LOCKS. Without this gate
+        // the scan-path kept saccading between features and the stop gesture
+        // looked broken.
+        if (this._freeze > 0.5) return;
         // V3.11: facial scan-path — a human never tracks the midpoint of your face.
         // It fixates one eye, saccades to the other, occasionally drops to the mouth
         // (the classic eyes-mouth triangle). Dwell 0.4–2.5s, alertness shortens it.
@@ -3156,6 +3163,9 @@ class EyeController {
     const g = this._gaze;
     const st = this.getEffState();
     const frz = 1 - this._freeze;
+    // V4.0.2: ✋ freeze holds the current idle fixation (no re-targeting toward
+    // center — the old amplitude damping made frozen eyes DRIFT to center)
+    if (this._freeze > 0.5) return;
     m.nextSaccadeIn -= dt;
     if (m.nextSaccadeIn <= 0) {
       const wide = Math.random() < 0.18;                     // occasional wide glance
@@ -4335,8 +4345,10 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
 
     // V3.11: respiration — the whole rig bobs gently (~0.23 Hz + a faint second
     // harmonic). The being breathes; stillness is what reads as dead.
+    // V4.0.2: ✋ freeze = held breath — the bob stops too.
     const bt = performance.now() / 1000;
-    renderer.eyeGroup.position.y = Math.sin(bt * 1.45) * 0.0075 + Math.sin(bt * 3.05 + 1.3) * 0.0018;
+    const breathK = 1 - controller._freeze;
+    renderer.eyeGroup.position.y = (Math.sin(bt * 1.45) * 0.0075 + Math.sin(bt * 3.05 + 1.3) * 0.0018) * breathK;
     // V4.0: hand-held camera drift — the framing itself breathes like a real shot
     const cd = photoConfig.cameraDrift;
     renderer.camera.position.x = Math.sin(bt * 0.131) * 0.013 * cd;
