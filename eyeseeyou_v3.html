@@ -305,6 +305,8 @@ const convergenceConfig = {
   // close finger bottom-left sent the eyes far past it.
   gazeTanX: 0.80,
   gazeTanY: 0.80,
+  faceZGain: 6.5,         // V4.11: iod → proximity gain (was hardcoded) — calibrate
+                          // with the z value in the tracking readout
   // V3.7: binocular regularisation. The eyes are decomposed into a shared VERSION
   // (common gaze direction — both eyes always move together) plus a symmetric,
   // capped VERGENCE (how far they cross). This is the physiological version/vergence
@@ -3254,6 +3256,9 @@ class EyeController {
       if (la.t > 2.2) la.active = false;
       return;
     }
+    // V4.11: ✋ freeze outranks the pointing finger too — the gaze LOCKS even if a
+    // pointing pose is still latched (only the transient reflexes above bypass it).
+    if (this._freeze > 0.5) return;
     // V3.4: a pointing finger outranks the face in EVERY gaze mode — the eye locks
     // onto the fingertip and crosses as it nears the lens (targetZ may exceed 1).
     const h = this.hand;
@@ -3593,7 +3598,7 @@ class FaceTracker {
       // V4.5: UNCAPPED depth — min(1.0, …) saturated at typical viewing distance,
       // freezing the target distance (and thus the vergence) in everyday use.
       // The proximity signal now stays continuous over the whole range.
-      this.controller.face.z = Math.min(1.45, iod * 6.5);
+      this.controller.face.z = Math.min(1.45, iod * convergenceConfig.faceZGain);
       // V3.11: scan-path features — viewer's eyes + mouth, in gaze-target coords
       // (same transform as face.x/y). lm[473]=left iris, lm[468]=right iris, lm[13]=upper lip.
       const _fx = v => -(v.x * 2 - 1) * p.sensitivity + p.parallaxX;
@@ -3692,14 +3697,15 @@ class FaceTracker {
     // V3.10: a finger pointed AT the camera (in front of the head) foreshortens — its
     // 2D wrist→tip distance collapses, so the ext() test fails and the face used to win.
     // Detect it in DEPTH instead: the index tip sits closer to the camera (smaller z)
-    // than its own knuckles → forward point. Accept 2D-extended OR forward-pointing,
-    // and reject only a clearly OPEN hand (both middle AND ring splayed), so a
-    // foreshortened index still counts.
+    // than its own knuckles → forward point. Accept 2D-extended OR forward-pointing.
+    // V4.11: an OPEN PALM facing the camera also has fingertips slightly nearer than
+    // the knuckles — the fwd test false-positived and the eye followed the palm
+    // (breaking ✋ freeze). The classified gesture now vetoes pointing outright.
+    const gesture = res.gestures?.[hi]?.[0]?.categoryName || 'None';
     const zf = (typeof lm[8].z === 'number');
     const fwd = zf && lm[8].z < lm[6].z - 0.015 && lm[8].z < lm[5].z - 0.02;
-    // strict side-on point (index out, others curled) OR a forward point (foreshortened,
-    // caught by depth). fwd bypasses the others-curled test since they foreshorten too.
-    const pointingRaw = !pinching && ((ext(8, 6) && !ext(12, 10) && !ext(16, 14)) || fwd);
+    const pointingRaw = !pinching && gesture !== 'Open_Palm'
+      && ((ext(8, 6) && !ext(12, 10) && !ext(16, 14)) || fwd);
     // V3.6: hysteresis — the raw pose flickers at borderline finger angles; engage
     // after 2 consecutive ticks, release after 4, so the gaze doesn't flip
     // between fingertip and face several times a second.
@@ -3711,7 +3717,6 @@ class FaceTracker {
     const pointing = this._pointOn >= 2;
     // V3.5: 🖕 — middle extended alone → contempt + ostensible look-away
     const rude = handConfig.reactions && ext(12, 10) && !ext(8, 6) && !ext(16, 14) && !ext(20, 18);
-    const gesture = res.gestures?.[hi]?.[0]?.categoryName || 'None';
     const t = pointing ? lm[8] : lm[9];   // index fingertip, else palm center
     const rawX = -(t.x * 2 - 1) * p.sensitivity + p.parallaxX;
     const rawY = -(t.y * 2 - 1) * p.sensitivity + p.parallaxY;
@@ -4379,6 +4384,7 @@ async function main() {
   gConv.add(convergenceConfig, 'targetDistance', -20, 20, 0.5).name('target distance');
   gConv.add(convergenceConfig, 'gazeTanX', 0.1, 2.5, 0.05).name('direction gain X');
   gConv.add(convergenceConfig, 'gazeTanY', 0.1, 2.5, 0.05).name('direction gain Y');
+  gConv.add(convergenceConfig, 'faceZGain', 3, 12, 0.1).name('face z gain (depth)');
   gConv.add(convergenceConfig, 'maxVergence', 0, 45, 1).name('max cross (°)');
   gConv.add(convergenceConfig, 'crossVergence', 0, 40, 1).name('finger cross (°)');
   gConv.add(gazeCoupling, 'topCoef', 0, 1.5, 0.01).name('lid coupling TOP');
