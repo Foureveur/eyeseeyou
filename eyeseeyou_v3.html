@@ -565,8 +565,15 @@ function generateSkinBumpTexture(size = 512) {
   return tex;
 }
 
+// V4.4: TRUE PALPEBRAL FISSURE — the fissure half-span in azimuth. The slit only
+// exists between two VISIBLE commissures at ±FISSURE_A from the front pole; beyond
+// them the upper and lower sheets fuse at the equator. Skin wraps the globe with an
+// incision in front — no more two floating half-shells whose "corners" were merely
+// hidden behind the eye's horizon. 1.35 rad keeps the lash arc mapping intact.
+const FISSURE_A = 1.35;
+
 function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
-  const azimuthRange = Math.PI * 2; // full 360° coverage
+  const azimuthRange = Math.PI * 2; // full 360° coverage (sheet wraps the globe)
   const cornerSharp = params.cornerSharp || 1.2;
   const outerAngle = params.outerAngle != null ? params.outerAngle : 0.08;
   const edgeMax = 0.36;  // V3: was 0.45 — narrower resting aperture, no more bulging stare
@@ -577,7 +584,7 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
   const normals = [];
   const uvs = [];
   const indices = [];
-  const vertParams = []; // store u, v, basePolar, baseAzimuth per vertex
+  const vertParams = []; // store u, v, basePolar, baseAzimuth, taper per vertex
 
   for (let j = 0; j <= segsV; j++) {
     const v = j / segsV;
@@ -585,14 +592,22 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       const u = i / segsU;
       const azimuth = (-0.5 + u) * azimuthRange;
 
-      // Almond taper: sin^cornerSharp(u*PI) → 0 at corners, 1 at center
-      const taper = Math.pow(Math.sin(u * Math.PI), cornerSharp);
-      // Asymmetry: outer corner slightly higher
+      // V4.4: fissure taper — sin profile INSIDE the fissure, exactly 0 beyond the
+      // commissures. This is also the "muscle activation profile": every aperture
+      // displacement is scaled by it, so the commissures stay pinned while the
+      // centre opens/closes (orbicularis/levator-like zipper motion).
+      const fa = Math.abs(azimuth);
+      const taper = fa < FISSURE_A
+        ? Math.pow(Math.sin(((azimuth + FISSURE_A) / (2 * FISSURE_A)) * Math.PI), cornerSharp)
+        : 0;
+      // V4.4: canthal tilt shifts BOTH margins the same way (a raised lateral
+      // canthus raises the whole commissure). The old sign-flipped version moved
+      // the two margins apart — it would have opened a pinhole at the commissure.
       const asymShift = outerAngle * (u - 0.5);
 
       const edgeAngle = taper * edgeMax;
       const openAngle = THREE.MathUtils.lerp(edgeAngle, creaseMax, v);
-      const polar = Math.PI / 2 - sign * (openAngle + asymShift);
+      const polar = Math.PI / 2 - sign * openAngle - asymShift;
 
       const x = radius * Math.sin(polar) * Math.sin(azimuth);
       const y = radius * Math.cos(polar);
@@ -607,7 +622,7 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       const profMargin = Math.exp(-Math.pow(v / 0.16, 2));
       const profHollow = -0.18 * Math.exp(-Math.pow((v - 0.45) / 0.22, 2));
       const profFold = 0.30 * Math.exp(-Math.pow((v - 0.86) / 0.18, 2));
-      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth, prof: profMargin + profHollow + profFold });
+      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold });
     }
   }
 
@@ -839,13 +854,17 @@ function createShadowStripGeometry(radius, segsU, isUpper, params = {}) {
     for (let i = 0; i <= segsU; i++) {
       const u = i / segsU;
       const azimuth = (-0.5 + u) * azimuthRange;
-      const taper = Math.pow(Math.sin(u * Math.PI), cornerSharp);
+      // V4.4: same fissure model as the lids — taper 0 beyond the commissures
+      const fa = Math.abs(azimuth);
+      const taper = fa < FISSURE_A
+        ? Math.pow(Math.sin(((azimuth + FISSURE_A) / (2 * FISSURE_A)) * Math.PI), cornerSharp)
+        : 0;
       const asymShift = outerAngle * (u - 0.5);
 
       // Shadow sits just inside the lid edge, extending inward (toward equator)
       const edgeAngle = taper * 0.36;  // V3: match edgeMax
       const openAngle = edgeAngle * (1.0 - v * 0.6); // shadow extends 60% from edge toward equator
-      const polar = Math.PI / 2 - sign * (openAngle + asymShift);
+      const polar = Math.PI / 2 - sign * openAngle - asymShift;
 
       const x = radius * Math.sin(polar) * Math.sin(azimuth);
       const y = radius * Math.cos(polar);
@@ -855,7 +874,7 @@ function createShadowStripGeometry(radius, segsU, isUpper, params = {}) {
       const len = Math.sqrt(x * x + y * y + z * z) || 1;
       normals.push(x / len, y / len, z / len);
       uvs.push(u, v);
-      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth });
+      vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth, taper });
     }
   }
 
@@ -2229,7 +2248,11 @@ class EyeRenderer {
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
         const edgeInfluence = 1.0 - p.v * 0.6;
-        const openShift = openAngle * edgeInfluence;
+        // V4.4: MUSCLE-PROFILE aperture — the opening displacement is scaled by
+        // the fissure taper, so the commissures stay pinned and the lid opens/
+        // closes like a zipper from the corners (orbicularis/levator activation),
+        // instead of the whole sheet sliding uniformly like a shutter.
+        const openShift = openAngle * edgeInfluence * (p.taper !== undefined ? p.taper : 1);
         const adjAzimuth = p.baseAzimuth * width;
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
