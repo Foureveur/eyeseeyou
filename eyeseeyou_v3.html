@@ -616,7 +616,11 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
   const cornerSharp = params.cornerSharp || 1.2;
   const outerAngle = params.outerAngle != null ? params.outerAngle : 0.08;
   const edgeMax = 0.36;  // V3: was 0.45 — narrower resting aperture, no more bulging stare
-  const creaseMax = (params.creaseDepth != null ? params.creaseDepth : 1.0) * Math.PI / 2;
+  // V4.12: the sheet ALWAYS reaches the pole — with partial coverage the naked
+  // globe showed past the sheet boundary at head yaw (the pale band demarcation).
+  // creaseDepth now only positions the fold PROFILE, never the coverage.
+  const creaseMax = Math.PI / 2;
+  const profScale = 1 / Math.max(0.15, params.creaseDepth != null ? params.creaseDepth : 1.0);
   const sign = isUpper ? 1 : -1;
 
   const positions = [];
@@ -658,9 +662,12 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
       normals.push(x / len, y / len, z / len);
       uvs.push(u, v);
       // V3: thickness profile — tarsal margin ridge, mid hollow, fold bulge
-      const profMargin = Math.exp(-Math.pow(v / 0.16, 2));
-      const profHollow = -0.18 * Math.exp(-Math.pow((v - 0.45) / 0.22, 2));
-      const profFold = 0.30 * Math.exp(-Math.pow((v - 0.86) / 0.18, 2));
+      // V4.12: evaluated at vp = v scaled by creaseDepth — the fold slides toward
+      // the margin when creaseDepth shrinks, coverage stays full
+      const vp = Math.min(1.2, v * profScale);
+      const profMargin = Math.exp(-Math.pow(vp / 0.16, 2));
+      const profHollow = -0.18 * Math.exp(-Math.pow((vp - 0.45) / 0.22, 2));
+      const profFold = 0.30 * Math.exp(-Math.pow((vp - 0.86) / 0.18, 2));
       vertParams.push({ u, v, basePolar: polar, baseAzimuth: azimuth, taper, prof: profMargin + profHollow + profFold });
     }
   }
@@ -689,9 +696,12 @@ function createAlmondLidGeometry(radius, segsU, segsV, isUpper, params = {}) {
     for (let i = 0; i <= segsU; i++) {
       const u = i / segsU;
       const creaseAO = 1.0 - v * v * 0.5;
-      // taper-based AO: darken where lid is thin (near the edge opening)
-      const taper = Math.pow(Math.sin(u * Math.PI), 1.2);
-      const edgeAO = 1.0 - (1.0 - v) * taper * 0.3; // darker near edge where lid opens
+      // V4.12: AO uses the SAME fissure taper as the geometry — the old full-arc
+      // sin(u·π) left a shading step at the commissures (visible demarcation)
+      const az2 = (-0.5 + u) * Math.PI * 2;
+      const taperAO = Math.abs(az2) < FISSURE_A
+        ? Math.pow(Math.sin(((az2 + FISSURE_A) / (2 * FISSURE_A)) * Math.PI), 1.2) : 0;
+      const edgeAO = 1.0 - (1.0 - v) * taperAO * 0.3; // darker near edge where lid opens
       const ao = creaseAO * edgeAO;
       const idx = (j * (segsU + 1) + i) * 3;
       colors[idx] = ao; colors[idx + 1] = ao; colors[idx + 2] = ao;
@@ -2351,7 +2361,11 @@ class EyeRenderer {
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
         // The contact shadow keeps zero thickness so it hugs the globe.
-        const falloff = isShadow ? 0 : (isInner || p.prof === undefined) ? (1.0 - p.v) : p.prof;
+        // V4.12: tGate fades the margin ridge/roll out beyond the commissures —
+        // there is no margin there, only fused skin (the ridge left a band)
+        const tGate = p.taper !== undefined ? Math.min(1, p.taper * 4) : 1;
+        const falloff = isShadow ? 0 : (isInner || p.prof === undefined) ? (1.0 - p.v)
+          : lerp(1.0 - p.v, p.prof, tGate);
         let thickR = R * (1.0 + thickness * thickSign * falloff);
         let polar = p.basePolar + (isUpper ? -openShift : openShift);
         // V4.8: ^^ banana — the lower margin bows UPWARD, strongest centrally
@@ -2368,7 +2382,7 @@ class EyeRenderer {
         if (!isInner && !isShadow && p.taper !== undefined) {
           const roll = Math.max(0, 1 - p.v / 0.09);
           if (roll > 0) {
-            const r2 = roll * roll;
+            const r2 = roll * roll * tGate;   // V4.12: no lip beyond the commissures
             polar += (isUpper ? 1 : -1) * r2 * 0.022 * (0.3 + 0.7 * p.taper);
             thickR = lerp(thickR, R * 0.974, r2 * 0.7);
           }
