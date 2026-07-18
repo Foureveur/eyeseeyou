@@ -381,6 +381,23 @@ const pupilPhysConfig = {
   tauConstrict: 0.30,  // s — constriction is FAST
   tauDilate: 2.5,      // s — dilation is SLOW (the asymmetry is the tell)
   reflexGain: 0.5,     // luminance → pupil offset gain
+  // V4.7: accommodation hunting — a depth CHANGE forces a refocus; the pupil
+  // overshoots and oscillates (~1.2 Hz, damped) before settling. With the V4
+  // iris tissue compression this reads as the iris itself quivering.
+  accomHunt: true,
+  accomGain: 6.0,      // depth-velocity → oscillator kick
+};
+
+// V4.7: photic LID response — outside a comfortable luminance band the lids
+// react, not just the pupil: photophobic squint against glare, reflex blink on
+// a sudden flash, slightly widened aperture in darkness. All optional.
+const exposureConfig = {
+  enabled: true,
+  dazzleBlink: true,     // sudden flash → reflex blink + full squint spike
+  squintGain: 1.0,       // strength of the photophobic squint
+  brightThreshold: 0.70, // luminance where squinting begins
+  darkAdapt: true,
+  darkThreshold: 0.16,   // luminance below which the aperture widens
 };
 
 // V4.0: photographic post chain — "banger frame" = a PHOTOGRAPH, not a render.
@@ -443,6 +460,7 @@ try {
     if (B.photo) Object.assign(photoConfig, B.photo);
     if (B.fem) Object.assign(femConfig, B.fem);
     if (B.pupilPhys) Object.assign(pupilPhysConfig, B.pupilPhys);
+    if (B.exposure) Object.assign(exposureConfig, B.exposure);
     _savedPersonality = B.personality || null;
   }
 } catch (e) {}
@@ -2627,7 +2645,10 @@ class EyeController {
       light: 0, lumDelayed: 0.45, queue: [],
       hippusA: Math.random() * 7, hippusB: Math.random() * 7,
       postBlink: 0,
+      accX: 0, accV: 0, lastDepth: null,   // V4.7: accommodation-hunting oscillator
     };
+    // V4.7: photic lid state — squint (glare) and dark (widened) levels
+    this._photic = { squint: 0, dark: 0, lastLum: 0.45, lastFlashAt: 0 };
     this._scheduleBlink();
   }
 
@@ -2952,8 +2973,14 @@ class EyeController {
       this._lidDroop = Math.min(droopMax, this._lidDroop + dt * weightConfig.droopRate * (0.5 + effState.fatigue));
     } else this._lidDroop = 0;
     const droop = this._lidDroop * weightConfig.lidDroop * 0.16;
-    const baseTop = Math.max(0.04, lidOpenEff - droop);
-    const baseBot = lidOpenEff * this._pulsed('lidLowerRatio', p.lidLowerRatio);
+    // V4.7: photic lid modulation — squint narrows the aperture (upper drops,
+    // lower rises), darkness widens it slightly. Reads previous-frame photic
+    // state (16 ms lag — irrelevant vs the 250 ms photomotor latency).
+    const phL = this._photic;
+    const baseTop = Math.max(0.04,
+      (lidOpenEff - droop) * (1 - phL.squint * 0.55) * (1 + phL.dark * 0.10));
+    const baseBot = lidOpenEff * this._pulsed('lidLowerRatio', p.lidLowerRatio)
+      * (1 - phL.squint * 0.30);
     // V3.11: per-eye blink amounts (L/R desync) feed the four springs separately
     this.eyelidController.update(dt, baseTop, baseBot, g.currentY,
       this.getBlinkAmount(), this.getBlinkAmountR());
@@ -3032,6 +3059,51 @@ class EyeController {
     }
     PP.postBlink *= Math.exp(-dt / 0.8);
     physOffset += PP.postBlink;
+
+    // V4.7: accommodation hunting — a depth change kicks a damped oscillator
+    // (~1.2 Hz, ζ≈0.22): the pupil overshoots and quivers while refocusing,
+    // which visibly ripples the compressed iris tissue.
+    if (pupilPhysConfig.accomHunt) {
+      const depthNow = (handConfig.enabled && this.hand.detected && this.hand.pointing)
+        ? Math.min(1.35, this.hand.z) : Math.min(1.35, this.face.z);
+      if (PP.lastDepth === null) PP.lastDepth = depthNow;
+      const dz = depthNow - PP.lastDepth;
+      PP.lastDepth = depthNow;
+      PP.accV += THREE.MathUtils.clamp(dz * pupilPhysConfig.accomGain, -0.3, 0.3);
+      const w = 2 * Math.PI * 1.2;
+      const cdt2 = Math.min(dt, 0.05);
+      PP.accV += (-(w * w) * PP.accX - 2 * 0.22 * w * PP.accV) * cdt2;
+      PP.accX += PP.accV * cdt2;
+      physOffset += THREE.MathUtils.clamp(PP.accX, -0.15, 0.15);
+    }
+
+    // V4.7: photic lid response — outside the comfortable luminance band the
+    // LIDS react too. Fast-attack / slow-release squint against glare, reflex
+    // blink on a sudden flash, gently widened aperture in darkness.
+    const ph = this._photic;
+    if (exposureConfig.enabled) {
+      const lum = PP.lumDelayed;
+      if (exposureConfig.dazzleBlink && lum - ph.lastLum > 0.28) {
+        if (nowMs - ph.lastFlashAt > 1200) {
+          ph.lastFlashAt = nowMs;
+          this.triggerBlink(false, true);       // dazzle: reflex blink forces through
+          ph.squint = Math.max(ph.squint, 1.0); // instant full squint, releases slowly
+          this._triggerPupilConstriction();
+        }
+      }
+      ph.lastLum += (lum - ph.lastLum) * Math.min(1, dt * 6);
+      const squintT = Math.min(1, THREE.MathUtils.smoothstep(lum, exposureConfig.brightThreshold, 0.97)
+        * exposureConfig.squintGain);
+      ph.squint += (squintT - ph.squint) * Math.min(1, squintT > ph.squint ? dt * 8 : dt * 0.8);
+      const darkT = exposureConfig.darkAdapt
+        ? 1 - THREE.MathUtils.smoothstep(lum, 0.045, exposureConfig.darkThreshold) : 0;
+      ph.dark += (darkT - ph.dark) * Math.min(1, dt * 1.2);
+      // pupil extremes: glare adds constriction on top of the reflex, dark adds dilation
+      physOffset += -ph.squint * 0.10 + ph.dark * 0.08;
+    } else {
+      ph.squint *= Math.exp(-dt * 2);
+      ph.dark *= Math.exp(-dt * 2);
+    }
 
     // V3.5: + emotion pulse (EMOTIONS[name].pupilSize blended over the current size)
     // + 🤏 pinch = direct pupil control (thumb-index gap maps to pupil size)
@@ -4072,7 +4144,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -4173,6 +4245,7 @@ async function main() {
         lash: lashConfig, heartbeat, pupilFocus: pupilFocusConfig,
         gazeCoupling, convConfig: convergenceConfig, hand: handConfig, weight: weightConfig,
         photo: photoConfig, fem: femConfig, pupilPhys: pupilPhysConfig,
+        exposure: exposureConfig,
         personality: persona.personality,
       }));
       leftBar._saved = '✓ saved';
@@ -4276,7 +4349,20 @@ async function main() {
   gPupil.add(pupilPhysConfig, 'lightReflex').name('light reflex (webcam)');
   gPupil.add(pupilPhysConfig, 'reflexGain', 0, 1.5, 0.05).name('reflex gain');
   gPupil.add(pupilPhysConfig, 'hippus').name('hippus (unrest)');
+  // V4.7: accommodation hunting — depth changes make the pupil/iris quiver
+  gPupil.add(pupilPhysConfig, 'accomHunt').name('accom. hunting (depth)');
+  gPupil.add(pupilPhysConfig, 'accomGain', 0, 15, 0.5).name('hunting gain');
   gPupil.close();
+
+  // V4.7: photic lid response — squint against glare, widen in darkness
+  const gExpo = gui.addFolder('Light response (v4.7)');
+  gExpo.add(exposureConfig, 'enabled').name('lid response');
+  gExpo.add(exposureConfig, 'dazzleBlink').name('flash → reflex blink');
+  gExpo.add(exposureConfig, 'squintGain', 0, 2, 0.05).name('squint strength');
+  gExpo.add(exposureConfig, 'brightThreshold', 0.4, 0.95, 0.01).name('glare threshold');
+  gExpo.add(exposureConfig, 'darkAdapt').name('widen in darkness');
+  gExpo.add(exposureConfig, 'darkThreshold', 0.02, 0.4, 0.01).name('dark threshold');
+  gExpo.close();
 
   // V2.4+V2.5: heartbeat mode — coupled with tension + frequency/irregularity/double pulse
   const gHeart = gui.addFolder('Heartbeat');
