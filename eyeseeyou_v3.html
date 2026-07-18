@@ -161,8 +161,8 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Thickness</label><input type="range" id="p-browThickness" min="0.3" max="2.0" step="0.05" value="1.0"><span class="v">1.00</span></div>
 
   <h3>Layout</h3>
-  <div class="pr"><label>Scale</label><input type="range" id="p-eyeScale" min="0.4" max="2.5" step="0.05" value="1.15"><span class="v">1.15</span></div>
-  <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3" step="0.05" value="1.80"><span class="v">1.80</span></div>
+  <div class="pr"><label>Scale</label><input type="range" id="p-eyeScale" min="0.4" max="2.5" step="0.05" value="0.72"><span class="v">0.72</span></div>
+  <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3.5" step="0.05" value="2.60"><span class="v">2.60</span></div>
   <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
   <div class="pr"><label>Socket</label><input type="range" id="p-socket" min="0" max="1" step="0.02" value="0.85"><span class="v">0.85</span></div>
@@ -2446,7 +2446,9 @@ class EyeController {
       lashesShow: 1, skinTexture: 0.003,
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#a56a60',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
-      eyeScale: 1.15, eyeSpacing: 1.80, eyeTilt: 0, cyclops: 0, socket: 0.85,
+      // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
+      // 1.15/1.80 gave two colossal touching globes. Smaller, properly spaced.
+      eyeScale: 0.72, eyeSpacing: 2.60, eyeTilt: 0, cyclops: 0, socket: 0.85,
       smoothing: 0.07, sensitivity: 1.0, maxTravel: 0.42, globeRotate: 0.8,
       parallaxX: 0, parallaxY: -0.08, vergenceBase: 0.04, vergenceMax: 0.3,
       reflectionIntensity: 1.0,
@@ -2469,7 +2471,13 @@ class EyeController {
       doubleQueued: false,   // true = fire a second blink right after
       lastBlinkTime: 0,      // timestamp of last blink
     };
+    // V4.1: seed emotion targets from the RESTORED params — they used to start at
+    // hardcoded neutral, so saved lid/pupil defaults were silently lerped away
+    // within a second of load ("Save as Default" looked broken for those keys).
     this._emoTargets = { ...EMOTIONS.neutral };
+    for (const k of Object.keys(this._emoTargets)) {
+      if (k in this.params) this._emoTargets[k] = this.params[k];
+    }
     this._gazeMode = 'continuous';
     this._micro = {
       timer: 0,
