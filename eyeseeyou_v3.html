@@ -10,7 +10,9 @@
 *{margin:0;padding:0;box-sizing:border-box;}
 body{background:#000;overflow:hidden;font-family:'Space Mono',monospace;color:#fff;cursor:crosshair;touch-action:none;-webkit-user-select:none;user-select:none;overscroll-behavior:none;}
 #canvas-container{width:100vw;height:100vh;height:100dvh;position:fixed;top:0;left:0;}
-#webcam-debug{position:fixed;bottom:16px;left:16px;width:180px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;z-index:100;display:none;opacity:0.6;}
+#webcam-debug{position:fixed;bottom:78px;left:16px;width:180px;border:1px solid rgba(255,255,255,0.12);border-radius:4px;z-index:100;display:none;opacity:0.6;}
+/* V4.9: live tracking readout under the webcam feed */
+#track-debug{position:fixed;bottom:14px;left:16px;width:180px;z-index:100;background:rgba(0,0,0,0.55);border:1px solid rgba(255,255,255,0.10);border-radius:4px;padding:5px 8px;font-family:'Space Mono',monospace;font-size:8px;line-height:1.55;color:rgba(255,255,255,0.75);letter-spacing:0.4px;white-space:pre;pointer-events:none;display:none;}
 #panel{position:fixed;top:0;right:0;width:310px;height:100vh;height:100dvh;background:rgba(5,5,10,0.93);backdrop-filter:blur(14px);border-left:1px solid rgba(255,255,255,0.06);z-index:200;transform:translateX(100%);transition:transform 0.35s cubic-bezier(0.4,0,0.2,1);overflow-y:auto;-webkit-overflow-scrolling:touch;padding:14px 14px 50px;font-size:11px;}
 #panel.open{transform:translateX(0);}
 #panel h3{font-size:9px;text-transform:uppercase;letter-spacing:3px;color:rgba(255,255,255,0.35);margin:14px 0 6px;padding-bottom:3px;border-bottom:1px solid rgba(255,255,255,0.05);}
@@ -79,7 +81,8 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
 <div id="panel-toggle" class="ui-layer">&#9881;</div>
 <div id="immerse-btn" class="ui-layer">Immerse</div>
 <div id="debug-hud" class="ui-layer" style="position:fixed;bottom:14px;right:14px;z-index:250;background:rgba(0,0,0,0.7);backdrop-filter:blur(8px);border:1px solid rgba(255,255,255,0.12);border-radius:6px;padding:8px 12px;font-family:'Space Mono',monospace;font-size:10px;line-height:1.6;color:rgba(255,255,255,0.85);letter-spacing:0.5px;display:none;pointer-events:none;"></div>
-<canvas id="webcam-overlay" class="ui-layer" style="position:fixed;bottom:16px;left:16px;width:180px;z-index:101;pointer-events:none;display:none;"></canvas>
+<canvas id="webcam-overlay" class="ui-layer" style="position:fixed;bottom:78px;left:16px;width:180px;z-index:101;pointer-events:none;display:none;"></canvas>
+<div id="track-debug" class="ui-layer"></div>
 
 <div id="panel" class="ui-layer">
   <h3>Iris</h3>
@@ -398,6 +401,7 @@ const exposureConfig = {
   dazzleBlink: true,     // sudden flash → reflex blink + full squint spike
   squintGain: 1.0,       // strength of the photophobic squint
   brightThreshold: 0.70, // luminance where squinting begins
+  saturThreshold: 0.86,  // V4.9: luminance where the lids CLAMP SHUT (blinding)
   darkAdapt: true,
   darkThreshold: 0.16,   // luminance below which the aperture widens
 };
@@ -2672,8 +2676,8 @@ class EyeController {
       postBlink: 0,
       accX: 0, accV: 0, lastDepth: null,   // V4.7: accommodation-hunting oscillator
     };
-    // V4.7: photic lid state — squint (glare) and dark (widened) levels
-    this._photic = { squint: 0, dark: 0, lastLum: 0.45, lastFlashAt: 0 };
+    // V4.7: photic lid state — squint (glare), shut (saturation) and dark levels
+    this._photic = { squint: 0, dark: 0, shut: 0, lastLum: 0.45, lastFlashAt: 0 };
     this._scheduleBlink();
   }
 
@@ -3004,10 +3008,10 @@ class EyeController {
     // lower rises), darkness widens it slightly. Reads previous-frame photic
     // state (16 ms lag — irrelevant vs the 250 ms photomotor latency).
     const phL = this._photic;
-    const baseTop = Math.max(0.04,
-      (lidOpenEff - droop) * (1 - phL.squint * 0.55) * (1 + phL.dark * 0.10));
-    const baseBot = lidOpenEff * this._pulsed('lidLowerRatio', p.lidLowerRatio)
-      * (1 - phL.squint * 0.30);
+    const baseTop = Math.max(0.02,
+      (lidOpenEff - droop) * (1 - phL.squint * 0.55 - phL.shut * 0.45) * (1 + phL.dark * 0.10));
+    const baseBot = Math.max(0, lidOpenEff * this._pulsed('lidLowerRatio', p.lidLowerRatio)
+      * (1 - phL.squint * 0.30 - phL.shut * 0.45));
     // V3.11: per-eye blink amounts (L/R desync) feed the four springs separately
     this.eyelidController.update(dt, baseTop, baseBot, g.currentY,
       this.getBlinkAmount(), this.getBlinkAmountR());
@@ -3122,6 +3126,11 @@ class EyeController {
       const squintT = Math.min(1, THREE.MathUtils.smoothstep(lum, exposureConfig.brightThreshold, 0.97)
         * exposureConfig.squintGain);
       ph.squint += (squintT - ph.squint) * Math.min(1, squintT > ph.squint ? dt * 8 : dt * 0.8);
+      // V4.9: SATURATION → full protective closure. Beyond blinding luminance the
+      // lids clamp shut (the staring-into-the-sun reflex) and reopen slowly.
+      const shutT = THREE.MathUtils.smoothstep(lum, exposureConfig.saturThreshold,
+        Math.min(0.995, exposureConfig.saturThreshold + 0.12));
+      ph.shut += (shutT - ph.shut) * Math.min(1, shutT > ph.shut ? dt * 10 : dt * 0.6);
       const darkT = exposureConfig.darkAdapt
         ? 1 - THREE.MathUtils.smoothstep(lum, 0.045, exposureConfig.darkThreshold) : 0;
       ph.dark += (darkT - ph.dark) * Math.min(1, dt * 1.2);
@@ -3130,6 +3139,7 @@ class EyeController {
     } else {
       ph.squint *= Math.exp(-dt * 2);
       ph.dark *= Math.exp(-dt * 2);
+      ph.shut *= Math.exp(-dt * 2);
     }
 
     // V3.5: + emotion pulse (EMOTIONS[name].pupilSize blended over the current size)
@@ -4387,6 +4397,7 @@ async function main() {
   gExpo.add(exposureConfig, 'dazzleBlink').name('flash → reflex blink');
   gExpo.add(exposureConfig, 'squintGain', 0, 2, 0.05).name('squint strength');
   gExpo.add(exposureConfig, 'brightThreshold', 0.4, 0.95, 0.01).name('glare threshold');
+  gExpo.add(exposureConfig, 'saturThreshold', 0.6, 0.98, 0.01).name('close threshold');
   gExpo.add(exposureConfig, 'darkAdapt').name('widen in darkness');
   gExpo.add(exposureConfig, 'darkThreshold', 0.02, 0.4, 0.01).name('dark threshold');
   gExpo.close();
@@ -4434,6 +4445,7 @@ async function main() {
   const applyWebcamVisibility = () => {
     document.getElementById('webcam-debug').style.display = tracking.showWebcam ? 'block' : 'none';
     document.getElementById('webcam-overlay').style.display = tracking.showWebcam ? 'block' : 'none';
+    document.getElementById('track-debug').style.display = tracking.showWebcam ? 'block' : 'none';   // V4.9
     applyMirrorCss();
   };
   gTrack.add(tracking, 'showWebcam').name('show webcam + face bbox').onChange(applyWebcamVisibility);
@@ -4537,6 +4549,30 @@ async function main() {
           ctx.beginPath();
           ctx.arc(hx, hy, ho.pointing ? 8 : 14, 0, Math.PI * 2);
           ctx.stroke();
+        }
+      }
+    }
+
+    // V4.9: live tracking readout under the webcam feed — what is tracked, where,
+    // measured luminance (to calibrate the photic thresholds on YOUR webcam),
+    // vergence and effective pupil.
+    if (tracking.showWebcam) {
+      window.__dbgTick = ((window.__dbgTick || 0) + 1) % 6;
+      if (window.__dbgTick === 0) {
+        const td = document.getElementById('track-debug');
+        if (td) {
+          const f = controller.face, h = controller.hand;
+          const finger = handConfig.enabled && h.detected && h.pointing;
+          const tgt = finger ? '☝ finger' : f.detected ? '👁 face' : '— none';
+          const src = finger ? h : f;
+          const y = renderer._lastYaw || { left: 0, right: 0 };
+          const ph = controller._photic;
+          td.textContent =
+            `tracked  ${tgt}\n` +
+            `pos      x ${src.x.toFixed(2)}  y ${src.y.toFixed(2)}  z ${src.z.toFixed(2)}\n` +
+            `lum ${controller._pupilPhys.lumDelayed.toFixed(2)}  squint ${ph.squint.toFixed(2)}  shut ${ph.shut.toFixed(2)}\n` +
+            `verg ${((y.left - y.right) * 0.5 * 180 / Math.PI).toFixed(1)}°  pupil ${(p.pupilSize + controller.getPupilFocusOffset()).toFixed(2)}` +
+            (h.detected ? `\nhand     ${h.gesture}${h.pinch !== null ? '  🤏 ' + h.pinch.toFixed(2) : ''}` : '');
         }
       }
     }
