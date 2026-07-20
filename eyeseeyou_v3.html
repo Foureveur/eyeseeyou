@@ -880,16 +880,24 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     }
     T.set(0, sign, 0);
     B.crossVectors(N, T).normalize();
-    Root.addScaledVector(N, -RR * 0.014)                   // planted under the surface
-      .addScaledVector(T, RR * 0.0028 * slot.row)
-      .addScaledVector(B, (Math.random() - 0.5) * RR * 0.004);
+    // V4.25 (coupe sagittale e-Anatomy) : les cils émergent du LIMBE ANTÉRIEUR
+    // (lèvre avant de la marge), en 2-3 rangées étagées EN PROFONDEUR
+    // (antéro-postérieur, le long de N), pas le long de la tangente. La rangée
+    // la plus antérieure porte les cils les plus longs/relevés.
+    // Aant = décalage antérieur (vers l'avant, hors du globe) par rangée.
+    const rowFrac = slot.row / 2;                          // 0 (postérieur) → 1 (antérieur)
+    const Aant = RR * (0.004 + rowFrac * 0.020);           // émergence sur la lèvre antérieure
+    Root.addScaledVector(N, Aant)
+      .addScaledVector(T, sign * RR * (0.002 + rowFrac * 0.010))   // léger recul vers la peau
+      .addScaledVector(B, (Math.random() - 0.5) * RR * 0.006);
+    const antRow = 0.72 + rowFrac * 0.5;                   // rangée antérieure = plus longue
 
     // V4.13: cluster-shared parameters, per-hair deviation × dev
     // V4.16: shrink hard near the canthi ends
     const lenProfile = lerp(0.50, 1.10, Math.pow(temporal, 0.9)) * (0.80 + 0.20 * centre)
       * lerp(0.55, 1.0, THREE.MathUtils.smoothstep(centre, 0.10, 0.42));
     const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile
-      * (slot.cLen + (Math.random() - 0.5) * 0.18 * dev);
+      * (slot.cLen + (Math.random() - 0.5) * 0.18 * dev) * antRow;
     const curl = CURLM * fCurl * lerp(1.0, 0.8, temporal) * (isUpper ? 1.0 : 0.62)
       * (slot.cCurl + (Math.random() - 0.5) * 0.25 * dev);
     // V4.18: splay boosted (±0.15) — the hairs used to sit in one plane like a
