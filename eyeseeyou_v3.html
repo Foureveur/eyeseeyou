@@ -159,6 +159,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Lid Clearcoat</label><input type="range" id="p-lidClearcoat" min="0" max="1" step="0.01" value="0.05"><span class="v">0.05</span></div>
   <div class="pr"><label>Lashes</label><input type="range" id="p-lashesShow" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
   <div class="pr"><label>Skin Texture</label><input type="range" id="p-skinTexture" min="0" max="0.01" step="0.001" value="0.003"><span class="v">0.003</span></div>
+  <div class="pr"><label>Peach Fuzz</label><input type="range" id="p-skinFuzz" min="0" max="1" step="0.02" value="0.45"><span class="v">0.45</span></div>
 
   <h3>Eyebrows</h3>
   <div class="pr"><label>Show</label><input type="range" id="p-browShow" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
@@ -329,7 +330,7 @@ const gazeCoupling = {
 // V3.3: live lash controls (rebuilds geometry on change — user tunes at full res)
 const lashConfig = {
   density: 3.3,     // multiplies anatomical count
-  thickness: 1.6,   // root width multiplier (→ mascara look)
+  thickness: 1.3,   // V4.18: 1.6 → 1.3 — finer strands, hooks → hairs
   length: 1.1,      // length multiplier
   curl: 1.0,        // J-curl multiplier
   clumping: 0.12,   // V4.13: COHESION inside a tuft (0 = loose hairs, 1 = glued tips)
@@ -876,8 +877,10 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       * (slot.cLen + (Math.random() - 0.5) * 0.18 * dev);
     const curl = CURLM * fCurl * lerp(1.0, 0.8, temporal) * (isUpper ? 1.0 : 0.62)
       * (slot.cCurl + (Math.random() - 0.5) * 0.25 * dev);
+    // V4.18: splay boosted (±0.15) — the hairs used to sit in one plane like a
+    // fence; real lashes fan in DEPTH too
     const lat = fanDir * (0.03 + temporal * 0.22) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
-      + slot.cLat + (Math.random() - 0.5) * 0.10 * dev;
+      + slot.cLat + (Math.random() - 0.5) * 0.15 * dev;
 
     // J-curl bezier — V4.5: user-controllable PITCH. 0 = the lash leaves flat,
     // forward off the margin; 1 = steeply lifted along the lid tangent.
@@ -919,12 +922,16 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       if (Ax1.lengthSq() < 0.1) Ax1.copy(N);
       Ax1.normalize();
       Ax2.crossVectors(Tan, Ax1).normalize();
-      const rad = Math.max(rootR * Math.pow(1 - v, 0.85), RR * 0.0004);
-      // keratin gradient: near-black root → warm dark-brown tip
+      // V4.18: sharper tip taper (pow 1.15, finer min) — the blunt 0.85 taper
+      // read as painted hooks rather than hairs
+      const rad = Math.max(rootR * Math.pow(1 - v, 1.15), RR * 0.00025);
+      // keratin gradient: near-black root → warm dark-brown tip, with a subtle
+      // mid-strand light catch (real hair picks a highlight along its bow)
       const kv = Math.pow(v, 1.4);
-      const cr = (0.030 + 0.130 * kv) * shade;
-      const cg = (0.020 + 0.085 * kv) * shade;
-      const cb = (0.016 + 0.060 * kv) * shade;
+      const midGlint = 1 + 0.35 * Math.sin(v * Math.PI);
+      const cr = (0.030 + 0.130 * kv) * shade * midGlint;
+      const cg = (0.020 + 0.085 * kv) * shade * midGlint;
+      const cb = (0.016 + 0.060 * kv) * shade * midGlint;
       for (let k = 0; k < SIDES; k++) {
         const ang = (k / SIDES) * Math.PI * 2;
         const ox = Math.cos(ang), oy = Math.sin(ang);
@@ -951,6 +958,92 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
   geo.setAttribute('normal', new THREE.Float32BufferAttribute(norms, 3));
   geo.setAttribute('color', new THREE.Float32BufferAttribute(cols, 3));
+  return geo;
+}
+
+// V4.18 (Sprint D): BRANCHING conjunctival veins — recursive random-walk trees
+// drawn to a canvas (u = azimuth, v = polar/π), sampled by the eye shader.
+// Seeds cluster at the canthi sides and grow toward the limbus, width shrinking
+// at each branch — actual vasculature, which ridged fbm worms never resembled.
+function generateVeinsTexture(size = 1024) {
+  const cv = document.createElement('canvas');
+  cv.width = size; cv.height = size;
+  const g = cv.getContext('2d');
+  g.fillStyle = '#000'; g.fillRect(0, 0, size, size);
+  g.lineCap = 'round'; g.strokeStyle = '#fff';
+  const drawBranch = (u, v, angDir, w, len, depth) => {
+    if (depth > 5 || w < 0.5 || len < 6) return;
+    let x = u * size, y = v * size, dir = angDir;
+    const steps = Math.max(3, Math.round(len / 7));
+    g.lineWidth = w;
+    g.globalAlpha = Math.min(1, 0.22 + w * 0.16);
+    g.beginPath(); g.moveTo(x, y);
+    for (let i = 0; i < steps; i++) {
+      dir += (Math.random() - 0.5) * 0.7;
+      x += Math.cos(dir) * 7;
+      y += Math.sin(dir) * 7 * 0.85 - 1.6;     // bias toward the limbus (front)
+      g.lineTo(x, y);
+    }
+    g.stroke();
+    const nKids = Math.random() < 0.75 ? 2 : 1;
+    for (let k = 0; k < nKids; k++) {
+      drawBranch(x / size, y / size, dir + (Math.random() - 0.5) * 1.2,
+        w * (0.55 + Math.random() * 0.2), len * (0.6 + Math.random() * 0.2), depth + 1);
+    }
+  };
+  for (let i = 0; i < 22; i++) {
+    const side = Math.random();
+    const u = side < 0.4 ? 0.5 + (Math.random() - 0.5) * 0.22
+      : side < 0.8 ? (Math.random() < 0.5 ? 0.04 : 0.96) + (Math.random() - 0.5) * 0.06
+      : Math.random();
+    const v = 0.42 + Math.random() * 0.20;
+    drawBranch(u, v, -Math.PI / 2 + (Math.random() - 0.5) * 1.4,
+      2.6 + Math.random() * 1.8, 60 + Math.random() * 70, 0);
+  }
+  g.globalAlpha = 1;
+  const tex = new THREE.CanvasTexture(cv);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.ClampToEdgeWrapping;
+  return tex;
+}
+
+// V4.18 (Sprint D, ref macro): VELLUS FUZZ — the pale peach-fuzz over the lid
+// skin. Short thin pale ribbons scattered over the outer lid surface.
+function createFuzzGeometry(radius, isUpper, count = 120) {
+  const SEG = 4;
+  const verts = [], indices = [];
+  const sign = isUpper ? 1 : -1;
+  const P = new THREE.Vector3(), N = new THREE.Vector3(), T0 = new THREE.Vector3();
+  const Dir = new THREE.Vector3(), Side = new THREE.Vector3();
+  for (let i = 0; i < count; i++) {
+    const az = (Math.random() * 2 - 1) * 2.1;
+    const open = 0.28 + Math.random() * 0.9;     // over the lid body, clear of the margin
+    const polar = Math.PI / 2 - sign * open;
+    const r = radius * 1.012;
+    P.set(r * Math.sin(polar) * Math.sin(az), r * Math.cos(polar), r * Math.sin(polar) * Math.cos(az));
+    N.copy(P).normalize();
+    T0.set(Math.random() - 0.5, Math.random() - 0.5, Math.random() - 0.5).cross(N).normalize();
+    const L = radius * (0.030 + Math.random() * 0.05);
+    const w = radius * 0.0012;
+    Dir.copy(N).multiplyScalar(0.55).addScaledVector(T0, 0.8).normalize();
+    Side.crossVectors(N, Dir).normalize().multiplyScalar(w);
+    const base = verts.length / 3;
+    for (let s = 0; s <= SEG; s++) {
+      const t = s / SEG;
+      const lift = L * 0.25 * Math.sin(t * Math.PI);
+      const px = P.x + Dir.x * L * t + N.x * lift;
+      const py = P.y + Dir.y * L * t + N.y * lift;
+      const pz = P.z + Dir.z * L * t + N.z * lift;
+      const wt = 1 - t * 0.9;
+      verts.push(px - Side.x * wt, py - Side.y * wt, pz - Side.z * wt);
+      verts.push(px + Side.x * wt, py + Side.y * wt, pz + Side.z * wt);
+      if (s > 0) { const k = base + (s - 1) * 2; indices.push(k, k + 1, k + 2, k + 1, k + 3, k + 2); }
+    }
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setIndex(indices);
+  geo.setAttribute('position', new THREE.Float32BufferAttribute(verts, 3));
+  geo.computeVertexNormals();
   return geo;
 }
 
@@ -1085,6 +1178,7 @@ uniform float uIrisAngle, uIrisRecess, uRefract, uIor, uIrisRough, uFibers;
 uniform vec3 uIrisColorA, uIrisColorB, uIrisTint, uScleraTint;
 uniform float uTexMix, uLimbusDark, uVeins;
 uniform sampler2D tIris;
+uniform sampler2D tVeins;
 uniform mat3 uLidRot;
 uniform float uLidUp, uLidLow, uMeniscus, uLidShadowK;
 uniform vec2 uLightXY;
@@ -1248,7 +1342,11 @@ const EYE_GLSL_COLOR = /* glsl */`
   sclCol *= 1.0 - 0.14 * smoothstep(irisAng + 0.45, irisAng + 0.02, ang);        // limbal shading
   float blush = eyeFbm(vec2(phiN * 8.0, ang * 3.0));
   sclCol = mix(sclCol, vec3(0.86, 0.62, 0.58), blush * 0.12 * uVeins);           // diffuse capillaries
-  sclCol = mix(sclCol, vec3(0.60, 0.15, 0.11), veins * veinVis * 0.55);          // vein branches
+  // V4.18: branching vein TEXTURE (random-walk trees) + faint fbm capillaries
+  float veinTex = texture2D(tVeins, vec2(phiN, ang / 3.14159)).r;
+  float veinsAll = clamp(veins * veinVis * 0.30
+    + veinTex * uVeins * 1.1 * smoothstep(irisAng + 0.04, irisAng + 0.40, ang), 0.0, 1.0);
+  sclCol = mix(sclCol, vec3(0.60, 0.15, 0.11), veinsAll);                        // vasculature
   sclCol *= 1.0 - 0.55 * smoothstep(1.9, 2.7, ang);                              // dark far back
 
   vec3 eyeCol = mix(sclCol, irisCol, win);
@@ -1642,6 +1740,7 @@ class EyeRenderer {
     this._textures = { irisColorTex };
     this._scleraR = R * 1.15;
     this._shadowGradTex = makeShadowGradientTexture();
+    this._veinsTex = generateVeinsTexture();   // V4.18: branching vasculature
     this.left = this._createEye(false);
     this.right = this._createEye(true);
     this.eyeGroup.add(this.left.group);
@@ -1677,6 +1776,7 @@ class EyeRenderer {
       uLimbusDark: { value: 0.55 },
       uVeins: { value: 0.5 },
       tIris: { value: this._textures.irisColorTex },
+      tVeins: { value: this._veinsTex },   // V4.18: branching vasculature
       // V3.1: lid-aware ambient occlusion + wet meniscus + iris light crescent
       uLidRot: { value: new THREE.Matrix3() },
       uLidUp: { value: 1.05 },    // polar angle of upper lid edge (lid space)
@@ -1884,6 +1984,20 @@ class EyeRenderer {
       lashMesh.renderOrder = 3.5;
       grp.add(lashMesh);
 
+      // V4.18: vellus fuzz — pale peach-fuzz over the lid skin (ref macro)
+      const fuzzGeo = createFuzzGeometry(lidR, isUpper, isUpper ? 130 : 90);
+      const fuzzMat = new THREE.MeshStandardMaterial({
+        color: 0xdcc4ac, roughness: 0.8, metalness: 0.0,
+        transparent: true, opacity: 0.45, depthWrite: false,
+        side: THREE.DoubleSide,
+      });
+      const fuzz = new THREE.Mesh(fuzzGeo, fuzzMat);
+      fuzz.name = 'fuzz';
+      fuzz.renderOrder = 3.6;
+      grp.add(fuzz);
+      this._fuzzMats = this._fuzzMats || [];
+      this._fuzzMats.push(fuzzMat);
+
       // V3: graded contact shadow — hugs the globe just under the lid edge.
       // Alpha gradient (opaque at the lash line, fading inward) reads as soft
       // occlusion; the V2 uniform strip read as a painted band and was removed.
@@ -1919,6 +2033,36 @@ class EyeRenderer {
     backCap.position.copy(scleraCenter);
     backCap.renderOrder = 4;
     group.add(backCap);
+
+    // V4.18 (Sprint D): CARUNCLE + PLICA — the fleshy pink mound in the nasal
+    // commissure, the #1 anatomical anchor of a real eye, finally possible now
+    // that the commissure exists (v4.4). Attached to the group (doesn't rotate
+    // with the gaze), tucked between the lid margins at the nasal corner.
+    {
+      const azC = (isRight ? -1 : 1) * FISSURE_A * 0.985;
+      const caruncleMat = new THREE.MeshPhysicalMaterial({
+        color: 0xc9766b, roughness: 0.38, metalness: 0.0,
+        clearcoat: 0.75, clearcoatRoughness: 0.2,
+        sheen: 0.4, sheenColor: new THREE.Color(0xffbbaa),
+        bumpMap: this._skinBumpTex, bumpScale: 0.0012,
+      });
+      const car = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.075, 16, 12), caruncleMat);
+      car.scale.set(1.0, 0.72, 0.55);
+      car.position.set(Reye * 1.005 * Math.sin(azC), 0, Reye * 1.005 * Math.cos(azC));
+      car.lookAt(car.position.x * 2, 0, car.position.z * 2);
+      car.name = 'caruncle';
+      car.renderOrder = 3.2;
+      group.add(car);
+      // plica semilunaris — the thin vertical crescent fold just temporal to it
+      const azP = azC - (isRight ? -1 : 1) * 0.09;
+      const plica = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.055, 12, 10), caruncleMat.clone());
+      plica.scale.set(0.45, 0.95, 0.32);
+      plica.position.set(Reye * 1.012 * Math.sin(azP), 0, Reye * 1.012 * Math.cos(azP));
+      plica.lookAt(plica.position.x * 2, 0, plica.position.z * 2);
+      plica.name = 'plica';
+      plica.renderOrder = 3.15;
+      group.add(plica);
+    }
 
     // V3.2: orbital socket — skin emerging from shadow around the eye. Floating
     // shells never read as real; this grounds them in an implied face.
@@ -2733,6 +2877,7 @@ class EyeController {
       lashesShow: 1, skinTexture: 0.003,
       lidEdgeShow: 1,   // V4.15.1: tranches VISIBLES (mal lu la demande) — c'est le
                         // liseré sombre qui contraste ; seul le look muqueuse rose dégage
+      skinFuzz: 0.45,   // V4.18: duvet vellus (peach fuzz) sur la peau des paupières
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#53332e',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
       // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
@@ -4278,6 +4423,9 @@ class DebugUI {
       case 'lidSheen': r.setLidSheen(val); break;
       case 'lidClearcoat': r.setLidClearcoat(val); break;
       case 'skinTexture': r.setSkinTexture(val); break;
+      case 'skinFuzz':
+        if (r._fuzzMats) r._fuzzMats.forEach(m => { m.opacity = val * 0.9; m.visible = val > 0.02; });
+        break;
       case 'lidOuterAngle': r.setLidParam('outerAngle', val); break;
       case 'eyeballScale': case 'corneaScale': case 'skinScale':
         this._applyLinkedScales(key, val); break;
@@ -4399,13 +4547,17 @@ async function main() {
   if (renderer.fillLight) renderer.fillLight.intensity = p.fillLight;
   if (renderer.backLight) renderer.backLight.intensity = p.backLight;
   renderer.setLidShadowOpacity(p.lidShadow);
-  // V4.15: waterline strips ("tranches") hidden by default
+  // V4.15: waterline strips visibility from params
   for (const eye of [renderer.left, renderer.right]) {
     if (!eye) continue;
     for (const name of ['upperLid', 'lowerLid']) {
       const edge = eye.lidWrap?.getObjectByName(name)?.getObjectByName('edge');
       if (edge) edge.visible = !!p.lidEdgeShow;
     }
+  }
+  // V4.18: peach fuzz from params
+  if (renderer._fuzzMats) {
+    renderer._fuzzMats.forEach(m => { m.opacity = p.skinFuzz * 0.9; m.visible = p.skinFuzz > 0.02; });
   }
   renderer.setLid3d(!!p.lid3d);
   renderer.setLidSkinColor(p.lidSkinColor);
