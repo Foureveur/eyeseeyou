@@ -1398,7 +1398,9 @@ const EYE_GLSL_COLOR = /* glsl */`
   //     is a thin crisp glint hugging the contact line. ---
   float mUp = smoothstep(0.032, 0.007, abs(polarL - marginUp - 0.018));
   float mLow = smoothstep(0.032, 0.007, abs(marginLow - polarL - 0.018));
-  gMeniscus = (mUp * 0.5 + mLow) * uMeniscus * smoothstep(0.05, 0.25, taperL);
+  // V4.22: le ménisque SUPÉRIEUR est quasi nul — la larme n'a rien sur quoi
+  // reposer en haut (gravité) ; seule la marge basse porte le fil de liquide
+  gMeniscus = (mUp * 0.08 + mLow) * uMeniscus * smoothstep(0.05, 0.25, taperL);
   // V4.17: meniscus SHADOW — the thin dark line just above the liquid strip
   // (real menisci read as dark line + bright glint, that pairing = "liquide")
   float menShade = smoothstep(0.045, 0.012, abs(marginLow - polarL - 0.052));
@@ -2066,26 +2068,31 @@ class EyeRenderer {
     // that the commissure exists (v4.4). Attached to the group (doesn't rotate
     // with the gaze), tucked between the lid margins at the nasal corner.
     {
-      const azC = (isRight ? -1 : 1) * FISSURE_A * 0.985;
+      // V4.22: la caroncule est NICHÉE dans la commissure — au-delà du point de
+      // convergence des marges (elles la recouvrent partiellement), plus petite,
+      // plus sombre (elle vit dans l'ombre du coin, posée dans le lac lacrymal),
+      // légèrement basse. Elle « reçoit » l'œil au lieu d'être collée devant.
+      const azC = (isRight ? -1 : 1) * (FISSURE_A + 0.045);
       const caruncleMat = new THREE.MeshPhysicalMaterial({
-        color: 0xc9766b, roughness: 0.38, metalness: 0.0,
-        clearcoat: 0.75, clearcoatRoughness: 0.2,
-        sheen: 0.4, sheenColor: new THREE.Color(0xffbbaa),
+        color: 0xb06a60, roughness: 0.42, metalness: 0.0,
+        clearcoat: 0.55, clearcoatRoughness: 0.25,
+        sheen: 0.35, sheenColor: new THREE.Color(0xee9f90),
+        envMapIntensity: 0.5,
         bumpMap: this._skinBumpTex, bumpScale: 0.0012,
       });
-      const car = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.075, 16, 12), caruncleMat);
-      car.scale.set(1.0, 0.72, 0.55);
-      car.position.set(Reye * 1.005 * Math.sin(azC), 0, Reye * 1.005 * Math.cos(azC));
-      car.lookAt(car.position.x * 2, 0, car.position.z * 2);
+      const car = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.062, 16, 12), caruncleMat);
+      car.scale.set(1.0, 0.68, 0.5);
+      car.position.set(Reye * 1.0 * Math.sin(azC), -Reye * 0.012, Reye * 1.0 * Math.cos(azC));
+      car.lookAt(car.position.x * 2, car.position.y * 2, car.position.z * 2);
       car.name = 'caruncle';
       car.renderOrder = 3.2;
       group.add(car);
       // plica semilunaris — the thin vertical crescent fold just temporal to it
-      const azP = azC - (isRight ? -1 : 1) * 0.09;
-      const plica = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.055, 12, 10), caruncleMat.clone());
-      plica.scale.set(0.45, 0.95, 0.32);
-      plica.position.set(Reye * 1.012 * Math.sin(azP), 0, Reye * 1.012 * Math.cos(azP));
-      plica.lookAt(plica.position.x * 2, 0, plica.position.z * 2);
+      const azP = azC - (isRight ? -1 : 1) * 0.075;
+      const plica = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.048, 12, 10), caruncleMat.clone());
+      plica.scale.set(0.42, 0.9, 0.3);
+      plica.position.set(Reye * 1.006 * Math.sin(azP), -Reye * 0.008, Reye * 1.006 * Math.cos(azP));
+      plica.lookAt(plica.position.x * 2, plica.position.y * 2, plica.position.z * 2);
       plica.name = 'plica';
       plica.renderOrder = 3.15;
       group.add(plica);
@@ -2585,14 +2592,6 @@ class EyeRenderer {
     eyes.forEach((eye, i) => {
       if (!eye) return;
       const ua = uaOf(upperAngle, i), la = uaOf(lowerAngle, i);
-      // V4.20: aperture half-angles — the shader rebuilds the full almond margin
-      // (taper + commissures + bow) from these, matching the real lid geometry
-      const u = this.eyeUniformSets[i];
-      if (u) {
-        u.uLidUp.value = 0.36 + ua;
-        u.uLidLow.value = 0.36 + la;
-        u.uLidBow.value = lowerBow;
-      }
       const ul = eye.lidWrap.getObjectByName('upperLid');
       const ll = eye.lidWrap.getObjectByName('lowerLid');
       const slantSign = cyclops ? 0 : (i === 0 ? 1 : -1);
@@ -2603,6 +2602,19 @@ class EyeRenderer {
 
       this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir, 0, dt);
       this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir, lowerBow, dt);
+      // V4.22: shader margins ride the SOFT margins (lag at fissure centre) —
+      // the meniscus rests ON the lids, so it must follow their ACTUAL motion
+      // (soft-skin lag included), not the muscle target ("le lacrymal ne
+      // réagit pas aux paupières").
+      const u = this.eyeUniformSets[i];
+      if (u) {
+        const mid = Math.floor((LID_SEGS.u + 1) / 2);
+        const uaEff = (softSkinConfig.enabled && ul?.userData.soft?.init) ? ul.userData.soft.lag[mid] : ua;
+        const laEff = (softSkinConfig.enabled && ll?.userData.soft?.init) ? ll.userData.soft.lag[mid] : la;
+        u.uLidUp.value = 0.36 + uaEff;
+        u.uLidLow.value = 0.36 + laEff;
+        u.uLidBow.value = lowerBow;
+      }
     });
     // V4.13: lashes follow the ^^ bow — throttled rebuild when it moves (the bow
     // is a per-vertex displacement the rotation compensation can't capture; the
@@ -2652,7 +2664,9 @@ class EyeRenderer {
             const az = (-0.5 + i / LID_SEGS.u) * Math.PI * 2;
             const fa = Math.abs(az);
             const taperC = fa < FISSURE_A ? Math.sin(((az + FISSURE_A) / (2 * FISSURE_A)) * Math.PI) : 0;
-            const softW = taperC * softSkinConfig.softness;
+            // V4.22: taperC² — la peau est TENDUE près des commissures (tendons
+            // canthaux) ; la souplesse se concentre au centre de la marge
+            const softW = taperC * taperC * softSkinConfig.softness;
             if (softW < 0.03) { S.lag[i] = openAngle; S.vel[i] = 0; continue; }
             const k = lerp(2400, 320, softW);
             const dmp = 2 * zeta * Math.sqrt(k);
