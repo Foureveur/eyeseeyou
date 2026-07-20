@@ -171,7 +171,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Spacing</label><input type="range" id="p-eyeSpacing" min="0.3" max="3.5" step="0.05" value="2.60"><span class="v">2.60</span></div>
   <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
-  <div class="pr"><label>Socket</label><input type="range" id="p-socket" min="0" max="1" step="0.02" value="0.85"><span class="v">0.85</span></div>
+  <div class="pr"><label>Halo (socket)</label><input type="range" id="p-socket" min="0" max="1" step="0.02" value="0"><span class="v">0.00</span></div>
 
   <h3>Tracking</h3>
   <div class="pr"><label>Smoothing</label><input type="range" id="p-smoothing" min="0.02" max="0.25" step="0.01" value="0.07"><span class="v">0.07</span></div>
@@ -443,6 +443,8 @@ const exposureConfig = {
 const photoConfig = {
   enabled: !(/Android|iPhone|iPad|iPod/i.test(navigator.userAgent)),
   bloom: 0.20,        // UnrealBloom strength (threshold is high — catchlights only)
+  halo: 0,            // V4.26: le HALO de fond (bloom large qui bave derrière les
+                      // yeux) — désactivé par défaut, slider pour le reproduire
   grain: 0.045,       // film grain amount
   vignette: 0.22,     // lens vignette
   cameraDrift: 1.0,   // hand-held framing drift multiplier
@@ -1614,7 +1616,7 @@ class EyeRenderer {
     this.composer = new EffectComposer(this.renderer);
     this.composer.addPass(new RenderPass(this.scene, this.camera));
     this.composer.addPass(new ShaderPass(NanScrubShader));
-    this._bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), photoConfig.bloom, 0.5, 0.88);
+    this._bloomPass = new UnrealBloomPass(new THREE.Vector2(innerWidth, innerHeight), photoConfig.bloom, 0.12, 0.88);
     this.composer.addPass(this._bloomPass);
     this.composer.addPass(new OutputPass());
     this._grainPass = new ShaderPass(GrainVignetteShader);
@@ -2977,7 +2979,11 @@ class EyeRenderer {
 
   render() {
     if (photoConfig.enabled && this.composer) {
-      this._bloomPass.strength = photoConfig.bloom;
+      // V4.26: bloom serré (catchlights) par défaut ; le slider `halo` élargit le
+      // rayon et abaisse le seuil pour reproduire le halo de fond derrière les yeux
+      this._bloomPass.strength = photoConfig.bloom * (1 + photoConfig.halo * 1.6);
+      this._bloomPass.radius = 0.12 + photoConfig.halo * 0.8;
+      this._bloomPass.threshold = 0.88 - photoConfig.halo * 0.35;
       this._grainPass.uniforms.uGrain.value = photoConfig.grain;
       this._grainPass.uniforms.uVig.value = photoConfig.vignette;
       this._grainPass.uniforms.uTime.value = performance.now() / 1000;
@@ -3132,7 +3138,9 @@ class EyeController {
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
       // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
       // 1.15/1.80 gave two colossal touching globes. Smaller, properly spaced.
-      eyeScale: 0.72, eyeSpacing: 2.60, eyeTilt: 0, cyclops: 0, socket: 0.85,
+      // V4.26: socket 0.85 → 0 — sur fond quasi-noir, le dégradé brun du sprite
+      // lisait comme un HALO lumineux derrière chaque œil, pas comme une ombre
+      eyeScale: 0.72, eyeSpacing: 2.60, eyeTilt: 0, cyclops: 0, socket: 0,
       smoothing: 0.07, sensitivity: 1.0, maxTravel: 0.42, globeRotate: 0.8,
       parallaxX: 0, parallaxY: -0.08, vergenceBase: 0.04, vergenceMax: 0.3,
       reflectionIntensity: 1.0,
@@ -3211,7 +3219,8 @@ class EyeController {
       glisX: 0, glisY: 0,
     };
     // V3.11: facial scan-path — fixate one feature of the viewer's face at a time
-    this._scan = { at: 'eyeL', t: 0 };
+    // V4.26: x/y = point de fixation TENU (snapshot + suivi lent, anti-jitter)
+    this._scan = { at: 'eyeL', t: 0, x: 0, y: 0, held: false };
     // V3.11: pupil physiology — light reflex (delayed, asymmetric) + hippus + post-blink
     this._pupilPhys = {
       light: 0, lumDelayed: 0.45, queue: [],
@@ -3810,10 +3819,26 @@ class EyeController {
           sc.at = (next === sc.at && next !== 'mouth') ? (next === 'eyeL' ? 'eyeR' : 'eyeL') : next;
           sc.t = (sc.at === 'mouth' ? 0.35 + Math.random() * 0.8 : 0.5 + Math.random() * 2.0)
             * lerp(1.3, 0.6, this.getEffState().alertness);
+          // V4.26: FIXATION HOLD — snapshot de la cible au début de la fixation
+          const f0 = f.features?.[sc.at];
+          if (f0) { sc.x = f0.x; sc.y = f0.y; sc.held = true; }
         }
         const ft = f.features?.[sc.at];
-        g.targetX = ft ? ft.x : f.x;
-        g.targetY = ft ? ft.y : f.y;
+        if (ft) {
+          // V4.26: un vrai œil fixe un POINT — il ne servo-suit pas le bruit de
+          // mesure des landmarks (~30 Hz). Le point tenu ne suit le landmark
+          // qu'à ~2.5 Hz : les mouvements lents de la tête passent, le jitter non.
+          if (!sc.held) { sc.x = ft.x; sc.y = ft.y; sc.held = true; }
+          const kf = Math.min(1, dt * 2.5);
+          sc.x += (ft.x - sc.x) * kf;
+          sc.y += (ft.y - sc.y) * kf;
+          g.targetX = sc.x;
+          g.targetY = sc.y;
+        } else {
+          sc.held = false;
+          g.targetX = f.x;
+          g.targetY = f.y;
+        }
         g.targetZ = f.z;
       } else this._updateMicro(dt);
     } else if (this._gazeMode === 'motion') {
@@ -5030,6 +5055,7 @@ async function main() {
   const gPhoto = gui.addFolder('Photo (v4)');
   gPhoto.add(photoConfig, 'enabled').name('post-processing');
   gPhoto.add(photoConfig, 'bloom', 0, 1, 0.01).name('bloom');
+  gPhoto.add(photoConfig, 'halo', 0, 1, 0.02).name('background halo');   // V4.26: off par défaut
   gPhoto.add(photoConfig, 'grain', 0, 0.15, 0.005).name('grain');
   gPhoto.add(photoConfig, 'vignette', 0, 0.6, 0.01).name('vignette');
   gPhoto.add(photoConfig, 'cameraDrift', 0, 2, 0.05).name('camera drift');
