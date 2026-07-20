@@ -2609,8 +2609,8 @@ class EyeRenderer {
       const u = this.eyeUniformSets[i];
       if (u) {
         const mid = Math.floor((LID_SEGS.u + 1) / 2);
-        const uaEff = (softSkinConfig.enabled && ul?.userData.soft?.init) ? ul.userData.soft.lag[mid] : ua;
-        const laEff = (softSkinConfig.enabled && ll?.userData.soft?.init) ? ll.userData.soft.lag[mid] : la;
+        const uaEff = (softSkinConfig.enabled && ul?.userData.soft?.out) ? ul.userData.soft.out[mid] : ua;
+        const laEff = (softSkinConfig.enabled && ll?.userData.soft?.out) ? ll.userData.soft.out[mid] : la;
         u.uLidUp.value = 0.36 + uaEff;
         u.uLidLow.value = 0.36 + laEff;
         u.uLidBow.value = lowerBow;
@@ -2664,22 +2664,55 @@ class EyeRenderer {
             const az = (-0.5 + i / LID_SEGS.u) * Math.PI * 2;
             const fa = Math.abs(az);
             const taperC = fa < FISSURE_A ? Math.sin(((az + FISSURE_A) / (2 * FISSURE_A)) * Math.PI) : 0;
+            if (taperC <= 0) { S.lag[i] = openAngle; S.vel[i] = 0; continue; }
             // V4.22: taperC² — la peau est TENDUE près des commissures (tendons
             // canthaux) ; la souplesse se concentre au centre de la marge
             const softW = taperC * taperC * softSkinConfig.softness;
-            if (softW < 0.03) { S.lag[i] = openAngle; S.vel[i] = 0; continue; }
-            const k = lerp(2400, 320, softW);
-            const dmp = 2 * zeta * Math.sqrt(k);
+            // V4.23: MASSE distribuée (concept de weighting utilisateur) — plus
+            // la chair est molle, plus elle est LOURDE : la force est divisée
+            // par m → les zones charnues filtrent les hautes fréquences au lieu
+            // de sur-réagir. Plus de seuil dur (les marches d'escalier venaient
+            // du snap des colonnes sous-seuil à côté de voisines simulées).
+            const k = lerp(2600, 380, Math.min(1, softW));
+            const m = 1 + softW * 2.5;
+            const dmp = 2 * zeta * Math.sqrt(k * m);
             const nb = S.lag[Math.max(0, i - 1)] + S.lag[Math.min(nu - 1, i + 1)] - 2 * S.lag[i];
-            S.vel[i] += ((openAngle - S.lag[i]) * k + nb * 500 - dmp * S.vel[i]) * sdt;
+            S.vel[i] += (((openAngle - S.lag[i]) * k + nb * 350 - dmp * S.vel[i]) / m) * sdt;
             S.lag[i] += S.vel[i] * sdt;
-            const dl = S.lag[i] - openAngle;           // lag clamp + velocity kill
-            if (dl > 0.10) { S.lag[i] = openAngle + 0.10; S.vel[i] *= 0.4; }
-            else if (dl < -0.10) { S.lag[i] = openAngle - 0.10; S.vel[i] *= 0.4; }
+            // V4.23: saturation DOUCE (tanh) — le clamp dur saturait des colonnes
+            // voisines à des instants différents → injection de dents de scie
+            const dl = S.lag[i] - openAngle;
+            const dlSat = 0.10 * Math.tanh(dl / 0.10);
+            if (Math.abs(dl) > 0.06) S.vel[i] *= 1 - Math.min(0.5, (Math.abs(dl) - 0.06) * 8 * sdt);
+            S.lag[i] = openAngle + dlSat;
           }
+        }
+        // V4.23: champ de SORTIE — 2 passes de lissage laplacien + blend pondéré
+        // continu vers la cible (le « weight painting ») : la marge est une
+        // courbe lisse PAR GARANTIE, quelles que soient les dynamiques.
+        if (!S.out || S.out.length !== nu) S.out = new Float32Array(nu);
+        S.out.set(S.lag);
+        for (let pass = 0; pass < 4; pass++) {
+          let prev = S.out[0];
+          for (let i = 1; i < nu - 1; i++) {
+            const cur = S.out[i];
+            S.out[i] = (prev + 2 * cur + S.out[i + 1]) * 0.25;
+            prev = cur;
+          }
+        }
+        for (let i = 0; i < nu; i++) {
+          const az = (-0.5 + i / LID_SEGS.u) * Math.PI * 2;
+          const fa = Math.abs(az);
+          const taperC = fa < FISSURE_A ? Math.sin(((az + FISSURE_A) / (2 * FISSURE_A)) * Math.PI) : 0;
+          // V4.23.1: rampe HERMITE — min(1, x) avait un genou (dérivée discontinue
+          // au point de saturation, az≈±1.05) qui cassait la pente de la marge
+          const t = Math.min(1, (taperC * taperC * softSkinConfig.softness) / 0.18);
+          const w = t * t * (3 - 2 * t);
+          S.out[i] = openAngle + (S.out[i] - openAngle) * w;
         }
       } else if (S.init) {
         S.lag.fill(openAngle); S.vel.fill(0); S.prevT = openAngle;
+        if (S.out) S.out.fill(openAngle);
       }
     }
     const Ssoft = lidGroup.userData.soft;
@@ -2712,7 +2745,7 @@ class EyeRenderer {
         // instead of the whole sheet sliding uniformly like a shutter.
         // V4.21: the aperture angle is read from the soft-skin lag field (per
         // column along the arc) — the margin whips/waves after a blink.
-        const effAngle = useLag ? Ssoft.lag[Math.round(p.u * LID_SEGS.u)] : openAngle;
+        const effAngle = (useLag && Ssoft.out) ? Ssoft.out[Math.round(p.u * LID_SEGS.u)] : openAngle;
         const openShift = effAngle * edgeInfluence * (p.taper !== undefined ? p.taper : 1);
         const adjAzimuth = p.baseAzimuth * width;
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
