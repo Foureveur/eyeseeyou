@@ -402,6 +402,20 @@ const pupilPhysConfig = {
   accomGain: 3.5,      // V4.17: 6.0 → 3.5 — la pupille bougeait beaucoup trop
 };
 
+// V4.19: SOFT SKIN — per-vertex spring dynamics on the lid sheets. The skin no
+// longer teleports to its muscle targets: it LAGS, overshoots and wobbles after
+// fast motion (blinks, squints), then settles. Pinned at the crease and the
+// commissures (rigid), softest at the central margin — so the margin whips
+// slightly on a blink like real loose skin. Strain-limited so the eye always
+// closes fully.
+//   softness  — how much the margin lags (0 = rigid, 1 = jelly)
+//   viscosity — damping: low = bouncy jiggle, high = thick slow skin
+const softSkinConfig = {
+  enabled: true,
+  softness: 0.55,
+  viscosity: 0.55,
+};
+
 // V4.10: HEAD orientation — the whole eye rig (globes + lids + sockets) can turn
 // like a head while the GAZE stays locked on the webcam target: setGaze converts
 // the world-space target direction into head-local space, so the eyes
@@ -485,6 +499,7 @@ try {
     if (B.pupilPhys) Object.assign(pupilPhysConfig, B.pupilPhys);
     if (B.exposure) Object.assign(exposureConfig, B.exposure);
     if (B.head) Object.assign(headConfig, B.head);
+    if (B.softSkin) Object.assign(softSkinConfig, B.softSkin);
     _savedPersonality = B.personality || null;
   }
 } catch (e) {}
@@ -2552,7 +2567,7 @@ class EyeRenderer {
 
   // V3.11: upperAngle/lowerAngle accept either a number (both eyes) or {l, r}
   // so desynced blinks reach the geometry per eye.
-  updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops, lowerBow = 0) {
+  updateLids(upperAngle, lowerAngle, slant, width, upperThickness, lowerThickness, cyclops, lowerBow = 0, dt = 0.016) {
     const uaOf = (v, i) => (typeof v === 'object') ? (i === 0 ? v.l : (v.r ?? v.l)) : v;
     const eyes = cyclops ? [this.left] : [this.left, this.right];
     eyes.forEach((eye, i) => {
@@ -2572,8 +2587,8 @@ class EyeRenderer {
       const gazeDir = new THREE.Vector3(0, 0, 1);
       if (eye.pivot) gazeDir.set(0, 0, 1).applyQuaternion(eye.pivot.quaternion);
 
-      this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir, 0);
-      this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir, lowerBow);
+      this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir, 0, dt);
+      this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir, lowerBow, dt);
     });
     // V4.13: lashes follow the ^^ bow — throttled rebuild when it moves (the bow
     // is a per-vertex displacement the rotation compensation can't capture; the
@@ -2585,7 +2600,7 @@ class EyeRenderer {
     }
   }
 
-  _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir, bow = 0) {
+  _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir, bow = 0, dtSim = 0.016) {
     if (!lidGroup) return;
     lidGroup.traverse(mesh => {
       if (!mesh.isMesh) return;
@@ -2600,6 +2615,21 @@ class EyeRenderer {
       const isInner = mesh.name === 'inner';
       const isShadow = mesh.name === 'shadow';
       const thickSign = isInner ? -0.04 : 0.07;
+
+      // V4.19: soft-skin state — one spring per vertex toward its muscle target
+      const doSim = softSkinConfig.enabled && !isShadow;
+      let simP = null, simV = null;
+      if (doSim) {
+        if (!mesh.userData.simPos || mesh.userData.simPos.length !== pos.count * 3) {
+          mesh.userData.simPos = new Float32Array(pos.count * 3);
+          mesh.userData.simVel = new Float32Array(pos.count * 3);
+          mesh.userData.simInit = false;
+        }
+        simP = mesh.userData.simPos;
+        simV = mesh.userData.simVel;
+      }
+      const sdt = Math.min(dtSim, 0.033);
+      const zeta = lerp(0.45, 1.15, softSkinConfig.viscosity);
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
@@ -2656,10 +2686,50 @@ class EyeRenderer {
         y *= (1 + bulge);
         z *= (1 + bulge);
 
-        pos.array[j * 3] = x;
-        pos.array[j * 3 + 1] = y;
-        pos.array[j * 3 + 2] = z;
+        const j3 = j * 3;
+        // V4.19: SOFT SKIN — the vertex springs toward its target instead of
+        // teleporting. Pinned (rigid) at crease/commissures, softest at the
+        // central margin → the margin lags and wobbles like real loose skin.
+        if (doSim) {
+          if (!mesh.userData.simInit) {
+            simP[j3] = x; simP[j3 + 1] = y; simP[j3 + 2] = z;
+          }
+          const softW = (p.taper ?? 0) * Math.pow(1 - Math.min(1, pv), 1.5) * softSkinConfig.softness;
+          if (softW > 0.02) {
+            const k = lerp(2600, 240, softW);
+            const dmp = 2 * zeta * Math.sqrt(k);
+            let ox = simP[j3] - x, oy = simP[j3 + 1] - y, oz = simP[j3 + 2] - z;
+            simV[j3]     += (-k * ox - dmp * simV[j3]) * sdt;
+            simV[j3 + 1] += (-k * oy - dmp * simV[j3 + 1]) * sdt;
+            simV[j3 + 2] += (-k * oz - dmp * simV[j3 + 2]) * sdt;
+            simP[j3]     += simV[j3] * sdt;
+            simP[j3 + 1] += simV[j3 + 1] * sdt;
+            simP[j3 + 2] += simV[j3 + 2] * sdt;
+            // strain limit — skin never lags more than ~6% of the radius, so a
+            // fast blink still closes completely
+            ox = simP[j3] - x; oy = simP[j3 + 1] - y; oz = simP[j3 + 2] - z;
+            const ol = Math.sqrt(ox * ox + oy * oy + oz * oz);
+            const om = R * 0.06;
+            if (ol > om) {
+              const sc = om / ol;
+              simP[j3] = x + ox * sc; simP[j3 + 1] = y + oy * sc; simP[j3 + 2] = z + oz * sc;
+            }
+            pos.array[j3] = simP[j3];
+            pos.array[j3 + 1] = simP[j3 + 1];
+            pos.array[j3 + 2] = simP[j3 + 2];
+          } else {
+            // rigid zone: follow the target exactly, keep the sim state in sync
+            simP[j3] = x; simP[j3 + 1] = y; simP[j3 + 2] = z;
+            simV[j3] = simV[j3 + 1] = simV[j3 + 2] = 0;
+            pos.array[j3] = x; pos.array[j3 + 1] = y; pos.array[j3 + 2] = z;
+          }
+        } else {
+          pos.array[j3] = x;
+          pos.array[j3 + 1] = y;
+          pos.array[j3 + 2] = z;
+        }
       }
+      if (doSim) mesh.userData.simInit = true;
       pos.needsUpdate = true;
     });
 
@@ -4498,7 +4568,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig, headConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig, headConfig, softSkinConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -4614,7 +4684,7 @@ async function main() {
         lash: lashConfig, heartbeat, pupilFocus: pupilFocusConfig,
         gazeCoupling, convConfig: convergenceConfig, hand: handConfig, weight: weightConfig,
         photo: photoConfig, fem: femConfig, pupilPhys: pupilPhysConfig,
-        exposure: exposureConfig, head: headConfig,
+        exposure: exposureConfig, head: headConfig, softSkin: softSkinConfig,
         personality: persona.personality,
       }));
       leftBar._saved = '✓ saved';
@@ -4733,6 +4803,13 @@ async function main() {
   gHead.add(headConfig, 'swayAmp', 0, 0.35, 0.01).name('sway amplitude');
   gHead.close();
 
+  // V4.19: soft skin dynamics
+  const gSoft = gui.addFolder('Soft skin (v4.19)');
+  gSoft.add(softSkinConfig, 'enabled').name('soft skin');
+  gSoft.add(softSkinConfig, 'softness', 0, 1, 0.02).name('softness (lag)');
+  gSoft.add(softSkinConfig, 'viscosity', 0, 1, 0.02).name('viscosity (damping)');
+  gSoft.close();
+
   // V4.7: photic lid response — squint against glare, widen in darkness
   const gExpo = gui.addFolder('Light response (v4.7)');
   gExpo.add(exposureConfig, 'enabled').name('lid response');
@@ -4838,7 +4915,7 @@ async function main() {
       l: ec.getBotOpennessL() * 0.52 + lidP.lowerTilt,
       r: ec.getBotOpennessR() * 0.52 + lidP.lowerTilt,
     };
-    renderer.updateLids(upperAng, lowerAng, lidP.slant, lidP.width, p.lidUpperThickness, p.lidLowerThickness, cyclops, lidP.bow);
+    renderer.updateLids(upperAng, lowerAng, lidP.slant, lidP.width, p.lidUpperThickness, p.lidLowerThickness, cyclops, lidP.bow, dt);
 
     // V2.1: Pupil accommodation ("mise au point") — brief constriction on saccade + depth-based offset
     if (convergenceEnabled.pupilFocus) {
