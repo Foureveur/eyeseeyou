@@ -2616,20 +2616,27 @@ class EyeRenderer {
       const isShadow = mesh.name === 'shadow';
       const thickSign = isInner ? -0.04 : 0.07;
 
-      // V4.19: soft-skin state — one spring per vertex toward its muscle target
-      const doSim = softSkinConfig.enabled && !isShadow;
-      let simP = null, simV = null;
+      // V4.19.1: soft-skin — la sim ne tourne que sur la nappe EXTERNE ; l'interne
+      // COPIE ses offsets (les deux peaux bougent d'un seul tenant — deux sims
+      // indépendantes se transperçaient : peau en lambeaux + vibration)
+      const doSim = softSkinConfig.enabled && !isShadow && !isInner;
+      const innerFollow = softSkinConfig.enabled && isInner;
+      const outerOff = innerFollow
+        ? (lidGroup.getObjectByName('outer')?.userData?.simOff || null) : null;
+      let simP = null, simV = null, simOff = null;
       if (doSim) {
         if (!mesh.userData.simPos || mesh.userData.simPos.length !== pos.count * 3) {
           mesh.userData.simPos = new Float32Array(pos.count * 3);
           mesh.userData.simVel = new Float32Array(pos.count * 3);
+          mesh.userData.simOff = new Float32Array(pos.count * 3);
           mesh.userData.simInit = false;
         }
         simP = mesh.userData.simPos;
         simV = mesh.userData.simVel;
+        simOff = mesh.userData.simOff;
       }
       const sdt = Math.min(dtSim, 0.033);
-      const zeta = lerp(0.45, 1.15, softSkinConfig.viscosity);
+      const zeta = lerp(0.5, 1.2, softSkinConfig.viscosity);
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
@@ -2696,7 +2703,7 @@ class EyeRenderer {
           }
           const softW = (p.taper ?? 0) * Math.pow(1 - Math.min(1, pv), 1.5) * softSkinConfig.softness;
           if (softW > 0.02) {
-            const k = lerp(2600, 240, softW);
+            const k = lerp(2600, 420, softW);
             const dmp = 2 * zeta * Math.sqrt(k);
             let ox = simP[j3] - x, oy = simP[j3 + 1] - y, oz = simP[j3 + 2] - z;
             simV[j3]     += (-k * ox - dmp * simV[j3]) * sdt;
@@ -2705,15 +2712,20 @@ class EyeRenderer {
             simP[j3]     += simV[j3] * sdt;
             simP[j3 + 1] += simV[j3 + 1] * sdt;
             simP[j3 + 2] += simV[j3 + 2] * sdt;
-            // strain limit — skin never lags more than ~6% of the radius, so a
-            // fast blink still closes completely
+            // V4.19.1: strain limit resserrée SOUS l'épaisseur de la paupière
+            // (2% du rayon) + la vitesse est amortie au clamp — la projection
+            // seule laissait l'énergie s'accumuler → vibration permanente
             ox = simP[j3] - x; oy = simP[j3 + 1] - y; oz = simP[j3 + 2] - z;
             const ol = Math.sqrt(ox * ox + oy * oy + oz * oz);
-            const om = R * 0.06;
+            const om = R * 0.02;
             if (ol > om) {
               const sc = om / ol;
               simP[j3] = x + ox * sc; simP[j3 + 1] = y + oy * sc; simP[j3 + 2] = z + oz * sc;
+              simV[j3] *= 0.4; simV[j3 + 1] *= 0.4; simV[j3 + 2] *= 0.4;
             }
+            simOff[j3] = simP[j3] - x;
+            simOff[j3 + 1] = simP[j3 + 1] - y;
+            simOff[j3 + 2] = simP[j3 + 2] - z;
             pos.array[j3] = simP[j3];
             pos.array[j3 + 1] = simP[j3 + 1];
             pos.array[j3 + 2] = simP[j3 + 2];
@@ -2721,8 +2733,14 @@ class EyeRenderer {
             // rigid zone: follow the target exactly, keep the sim state in sync
             simP[j3] = x; simP[j3 + 1] = y; simP[j3 + 2] = z;
             simV[j3] = simV[j3 + 1] = simV[j3 + 2] = 0;
+            simOff[j3] = simOff[j3 + 1] = simOff[j3 + 2] = 0;
             pos.array[j3] = x; pos.array[j3 + 1] = y; pos.array[j3 + 2] = z;
           }
+        } else if (innerFollow && outerOff) {
+          // V4.19.1: l'interne suit les offsets de l'externe — un seul tissu
+          pos.array[j3] = x + outerOff[j3];
+          pos.array[j3 + 1] = y + outerOff[j3 + 1];
+          pos.array[j3 + 2] = z + outerOff[j3 + 2];
         } else {
           pos.array[j3] = x;
           pos.array[j3 + 1] = y;
