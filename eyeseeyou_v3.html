@@ -1195,7 +1195,7 @@ uniform float uTexMix, uLimbusDark, uVeins;
 uniform sampler2D tIris;
 uniform sampler2D tVeins;
 uniform mat3 uLidRot;
-uniform float uLidUp, uLidLow, uMeniscus, uLidShadowK;
+uniform float uLidUp, uLidLow, uMeniscus, uLidShadowK, uLidBow;
 uniform vec2 uLightXY;
 uniform float uIrisRelief;
 float gEyeIrisMask = 0.0;
@@ -1371,8 +1371,17 @@ const EYE_GLSL_COLOR = /* glsl */`
   //     Anchors the eye into the lids — kills the uniform doll-white sclera. ---
   vec3 dirL = uLidRot * dirN;                                   // object → lid space
   float polarL = acos(clamp(dirL.y, -1.0, 1.0));                // 0 at top pole
-  float occUp = 0.60 * smoothstep(0.55, -0.05, polarL - uLidUp);
-  float occLow = 0.38 * smoothstep(0.45, -0.05, uLidLow - polarL);
+  // V4.20: the shader lid model follows the REAL almond fissure — taper,
+  // commissures and ^^ bow — instead of the old flat center-line circles.
+  // The meniscus/AO/cast-shadow were still tracking the pre-v4.4 lids
+  // ("le lacrymal suit les anciennes paupières").
+  float azL = atan(dirL.x, dirL.z);
+  float faL = abs(azL);
+  float taperL = faL < 1.35 ? pow(max(sin((azL + 1.35) / 2.70 * 3.14159265), 0.0), 0.95) : 0.0;
+  float marginUp = 1.5707963 - taperL * uLidUp;
+  float marginLow = 1.5707963 + taperL * uLidLow - uLidBow * pow(taperL, 1.35) * 0.30;
+  float occUp = 0.60 * smoothstep(0.55, -0.05, polarL - marginUp);
+  float occLow = 0.38 * smoothstep(0.45, -0.05, marginLow - polarL);
   // warm shadow — occluded light on translucent tissue shifts red, not gray
   eyeCol *= mix(vec3(1.0), vec3(0.62, 0.45, 0.40), clamp(occUp + occLow, 0.0, 0.85));
 
@@ -1380,25 +1389,25 @@ const EYE_GLSL_COLOR = /* glsl */`
   //     under the margin (ref macro). The broad AO above reads as shading; this
   //     band is what reads as "the lid occludes the light". Driven by the same
   //     Lid Shadow slider as the mesh strip. ---
-  float dSh = polarL - uLidUp;
+  float dSh = polarL - marginUp;
   float castSh = smoothstep(0.26, 0.015, dSh) * smoothstep(-0.015, 0.02, dSh);
   eyeCol *= mix(vec3(1.0), vec3(0.50, 0.37, 0.33), castSh * uLidShadowK);
 
   // --- tear meniscus — V4.5.1: NARROW. The old 0.10-rad falloff painted a wide
   //     misty white band above the lower lid ("ombre blanche"); a real meniscus
   //     is a thin crisp glint hugging the contact line. ---
-  float mUp = smoothstep(0.032, 0.007, abs(polarL - uLidUp - 0.018));
-  float mLow = smoothstep(0.032, 0.007, abs(uLidLow - polarL - 0.018));
-  gMeniscus = (mUp * 0.5 + mLow) * uMeniscus;
+  float mUp = smoothstep(0.032, 0.007, abs(polarL - marginUp - 0.018));
+  float mLow = smoothstep(0.032, 0.007, abs(marginLow - polarL - 0.018));
+  gMeniscus = (mUp * 0.5 + mLow) * uMeniscus * smoothstep(0.05, 0.25, taperL);
   // V4.17: meniscus SHADOW — the thin dark line just above the liquid strip
   // (real menisci read as dark line + bright glint, that pairing = "liquide")
-  float menShade = smoothstep(0.045, 0.012, abs(uLidLow - polarL - 0.052));
-  eyeCol *= 1.0 - menShade * 0.12 * uMeniscus;
+  float menShade = smoothstep(0.045, 0.012, abs(marginLow - polarL - 0.052));
+  eyeCol *= 1.0 - menShade * 0.12 * uMeniscus * smoothstep(0.05, 0.25, taperL);
 
   // --- V3.11: tear-film zoning — the EXPOSED globe carries a glossy tear film,
   //     the zones sliding under the lids are drier/matte. Uniform roughness was
   //     the single cheapest materiality miss (TinyEye look = wet exposed dome). ---
-  gWet = smoothstep(-0.04, 0.18, polarL - uLidUp) * smoothstep(-0.04, 0.18, uLidLow - polarL);
+  gWet = smoothstep(-0.04, 0.18, polarL - marginUp) * smoothstep(-0.04, 0.18, marginLow - polarL);
 
   diffuseColor.rgb = eyeCol;
   gEyeIrisMask = win;
@@ -1794,8 +1803,11 @@ class EyeRenderer {
       tVeins: { value: this._veinsTex },   // V4.18: branching vasculature
       // V3.1: lid-aware ambient occlusion + wet meniscus + iris light crescent
       uLidRot: { value: new THREE.Matrix3() },
-      uLidUp: { value: 1.05 },    // polar angle of upper lid edge (lid space)
-      uLidLow: { value: 2.10 },   // polar angle of lower lid edge
+      // V4.20: aperture half-angles (scaled by the fissure taper in-shader) —
+      // no longer flat polar circles
+      uLidUp: { value: 0.60 },
+      uLidLow: { value: 0.52 },
+      uLidBow: { value: 0 },
       uLightXY: { value: new THREE.Vector2(0.4, 0.8) },
       uMeniscus: { value: 0.5 },
       uLidShadowK: { value: 0.5 },   // V4.14: cast-shadow band strength
@@ -2573,11 +2585,13 @@ class EyeRenderer {
     eyes.forEach((eye, i) => {
       if (!eye) return;
       const ua = uaOf(upperAngle, i), la = uaOf(lowerAngle, i);
-      // V3.1: lid aperture polar angles for the shader AO (center-line approximation)
+      // V4.20: aperture half-angles — the shader rebuilds the full almond margin
+      // (taper + commissures + bow) from these, matching the real lid geometry
       const u = this.eyeUniformSets[i];
       if (u) {
-        u.uLidUp.value = Math.PI / 2 - (0.36 + ua);
-        u.uLidLow.value = Math.PI / 2 + (0.36 + la) - lowerBow * 0.20;
+        u.uLidUp.value = 0.36 + ua;
+        u.uLidLow.value = 0.36 + la;
+        u.uLidBow.value = lowerBow;
       }
       const ul = eye.lidWrap.getObjectByName('upperLid');
       const ll = eye.lidWrap.getObjectByName('lowerLid');
