@@ -1399,8 +1399,9 @@ const EYE_GLSL_COLOR = /* glsl */`
   float mUp = smoothstep(0.032, 0.007, abs(polarL - marginUp - 0.018));
   float mLow = smoothstep(0.032, 0.007, abs(marginLow - polarL - 0.018));
   // V4.22: le ménisque SUPÉRIEUR est quasi nul — la larme n'a rien sur quoi
-  // reposer en haut (gravité) ; seule la marge basse porte le fil de liquide
-  gMeniscus = (mUp * 0.08 + mLow) * uMeniscus * smoothstep(0.05, 0.25, taperL);
+  // reposer en haut (gravité). V4.24: la bande peinte s'efface au profit du
+  // PRISME volumique (mesh verre) qui remplit réellement le coin marge-globe.
+  gMeniscus = (mUp * 0.03 + mLow * 0.5) * uMeniscus * smoothstep(0.05, 0.25, taperL);
   // V4.17: meniscus SHADOW — the thin dark line just above the liquid strip
   // (real menisci read as dark line + bright glint, that pairing = "liquide")
   float menShade = smoothstep(0.045, 0.012, abs(marginLow - polarL - 0.052));
@@ -2027,6 +2028,39 @@ class EyeRenderer {
       this._fuzzMats = this._fuzzMats || [];
       this._fuzzMats.push(fuzzMat);
 
+      // V4.24: MÉNISQUE VOLUMIQUE — un vrai prisme de larme entre la marge basse
+      // et le globe (verre transmissif), au lieu d'une bande peinte qui « colore
+      // l'œil sans remplir l'espace » (review). Positions mises à jour chaque
+      // frame sur la marge AFFICHÉE (lag de peau molle inclus).
+      if (!isUpper) {
+        const nCols = segsU + 1;
+        const menGeo = new THREE.BufferGeometry();
+        menGeo.setAttribute('position',
+          new THREE.Float32BufferAttribute(new Float32Array(nCols * 3 * 3), 3));
+        const mIdx = [];
+        for (let rr = 0; rr < 2; rr++) {
+          for (let ii = 0; ii < segsU; ii++) {
+            const a = rr * nCols + ii, b = a + 1, c2 = a + nCols, d2 = c2 + 1;
+            mIdx.push(a, b, c2, b, d2, c2);
+          }
+        }
+        menGeo.setIndex(mIdx);
+        const menMat = new THREE.MeshPhysicalMaterial({
+          color: 0xf4f9ff, metalness: 0.0, roughness: 0.045,
+          transmission: 0.9, thickness: 0.02, ior: 1.336,
+          clearcoat: 1.0, clearcoatRoughness: 0.05,
+          transparent: true, opacity: 0.5, depthWrite: false,
+          side: THREE.DoubleSide, envMapIntensity: 1.5,
+        });
+        const men = new THREE.Mesh(menGeo, menMat);
+        men.name = 'meniscusStrip';
+        men.renderOrder = 3.4;
+        men.frustumCulled = false;
+        grp.add(men);
+        this._meniscusMeshes = this._meniscusMeshes || [];
+        this._meniscusMeshes.push(men);
+      }
+
       // V3: graded contact shadow — hugs the globe just under the lid edge.
       // Alpha gradient (opaque at the lash line, fading inward) reads as soft
       // occlusion; the V2 uniform strip read as a painted band and was removed.
@@ -2072,24 +2106,49 @@ class EyeRenderer {
       // convergence des marges (elles la recouvrent partiellement), plus petite,
       // plus sombre (elle vit dans l'ombre du coin, posée dans le lac lacrymal),
       // légèrement basse. Elle « reçoit » l'œil au lieu d'être collée devant.
+      // V4.24 (anatomie réelle) : la caruncula lacrimalis est un monticule
+      // LOBULÉ — glandes sébacées + follicules de duvet — jamais un œuf lisse.
+      // Géométrie bosselée par bruit radial, creux plus rouges/sombres
+      // (vertex colors), surface humide (clearcoat), posée dans le lacus.
       const azC = (isRight ? -1 : 1) * (FISSURE_A + 0.045);
+      const carGeo = new THREE.SphereGeometry(Reye * 0.058, 20, 14);
+      {
+        const cp = carGeo.getAttribute('position');
+        const cc = new Float32Array(cp.count * 3);
+        for (let vi = 0; vi < cp.count; vi++) {
+          const vx = cp.getX(vi), vy = cp.getY(vi), vz = cp.getZ(vi);
+          const n = Math.sin(vx * 92 + vy * 55) * Math.cos(vy * 71 - vz * 63) * 0.5
+                  + Math.sin(vz * 84 + vx * 47) * 0.5;
+          const disp = 1 + n * 0.14;                       // lobes charnus
+          cp.setXYZ(vi, vx * disp, vy * disp, vz * disp);
+          const shade = 0.80 + Math.max(0, n) * 0.28;      // creux plus rouges/sombres
+          cc[vi * 3] = shade; cc[vi * 3 + 1] = shade * 0.90; cc[vi * 3 + 2] = shade * 0.90;
+        }
+        carGeo.setAttribute('color', new THREE.BufferAttribute(cc, 3));
+        carGeo.computeVertexNormals();
+      }
       const caruncleMat = new THREE.MeshPhysicalMaterial({
-        color: 0xb06a60, roughness: 0.42, metalness: 0.0,
-        clearcoat: 0.55, clearcoatRoughness: 0.25,
-        sheen: 0.35, sheenColor: new THREE.Color(0xee9f90),
-        envMapIntensity: 0.5,
-        bumpMap: this._skinBumpTex, bumpScale: 0.0012,
+        color: 0xc4756a, vertexColors: true, roughness: 0.34, metalness: 0.0,
+        clearcoat: 0.85, clearcoatRoughness: 0.18,
+        sheen: 0.3, sheenColor: new THREE.Color(0xffb0a0),
+        envMapIntensity: 0.6,
       });
-      const car = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.062, 16, 12), caruncleMat);
-      car.scale.set(1.0, 0.68, 0.5);
-      car.position.set(Reye * 1.0 * Math.sin(azC), -Reye * 0.012, Reye * 1.0 * Math.cos(azC));
+      const car = new THREE.Mesh(carGeo, caruncleMat);
+      car.scale.set(1.0, 0.72, 0.55);
+      car.position.set(Reye * 0.995 * Math.sin(azC), -Reye * 0.012, Reye * 0.995 * Math.cos(azC));
       car.lookAt(car.position.x * 2, car.position.y * 2, car.position.z * 2);
       car.name = 'caruncle';
       car.renderOrder = 3.2;
       group.add(car);
-      // plica semilunaris — the thin vertical crescent fold just temporal to it
+      // plica semilunaris — croissant conjonctival lisse, plus pâle, juste
+      // temporal à la caroncule
+      const plicaMat = new THREE.MeshPhysicalMaterial({
+        color: 0xd39a8c, roughness: 0.25, metalness: 0.0,
+        clearcoat: 0.9, clearcoatRoughness: 0.12,
+        envMapIntensity: 0.7,
+      });
       const azP = azC - (isRight ? -1 : 1) * 0.075;
-      const plica = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.048, 12, 10), caruncleMat.clone());
+      const plica = new THREE.Mesh(new THREE.SphereGeometry(Reye * 0.048, 12, 10), plicaMat);
       plica.scale.set(0.42, 0.9, 0.3);
       plica.position.set(Reye * 1.006 * Math.sin(azP), -Reye * 0.008, Reye * 1.006 * Math.cos(azP));
       plica.lookAt(plica.position.x * 2, plica.position.y * 2, plica.position.z * 2);
@@ -2218,7 +2277,49 @@ class EyeRenderer {
   setIrisRelief(v) { for (const u of this.eyeUniformSets) u.uIrisRelief.value = v; }   // V4.0
   setTexMix(v) { for (const u of this.eyeUniformSets) u.uTexMix.value = v; }
   setVeins(v) { for (const u of this.eyeUniformSets) u.uVeins.value = v; }
-  setMeniscus(v) { for (const u of this.eyeUniformSets) u.uMeniscus.value = v; }
+  setMeniscus(v) {
+    for (const u of this.eyeUniformSets) u.uMeniscus.value = v;
+    // V4.24: le slider pilote aussi le prisme volumique
+    if (this._meniscusMeshes) {
+      this._meniscusMeshes.forEach(m => {
+        m.visible = v > 0.02;
+        m.material.opacity = 0.12 + v * 0.55;
+      });
+    }
+  }
+
+  // V4.24: le prisme de larme suit la marge basse AFFICHÉE — 3 rangées :
+  // contact à la marge, ventre bombé, feather qui s'évanouit sur le globe ;
+  // s'effile vers les commissures (taper^0.7).
+  _updateMeniscusStrip(lidGroup) {
+    if (!lidGroup) return;
+    const men = lidGroup.getObjectByName('meniscusStrip');
+    const outer = lidGroup.getObjectByName('outer');
+    if (!men || !outer || !men.visible) return;
+    const oPos = outer.geometry.getAttribute('position');
+    const vpar = outer.geometry.userData.vertParams;
+    const G = outer.geometry.userData.radius / 1.05;   // rayon du globe (espace lid)
+    const nCols = LID_SEGS.u + 1;
+    const mPos = men.geometry.getAttribute('position');
+    for (let i = 0; i < nCols; i++) {
+      const x = oPos.getX(i), y = oPos.getY(i), z = oPos.getZ(i);
+      const rr2 = Math.sqrt(x * x + y * y + z * z) || 1;
+      const polar = Math.acos(Math.min(1, Math.max(-1, y / rr2)));
+      const az = Math.atan2(x, z);
+      const h = Math.pow(Math.max(0, vpar?.[i]?.taper ?? 0), 0.7);
+      const rows = [[0.006, G * 1.030], [-0.018 * h, G * 1.0165], [-0.044 * h, G * 1.004]];
+      for (let r = 0; r < 3; r++) {
+        const pol = polar + rows[r][0];
+        const rad = rows[r][1];
+        mPos.setXYZ(r * nCols + i,
+          rad * Math.sin(pol) * Math.sin(az),
+          rad * Math.cos(pol),
+          rad * Math.sin(pol) * Math.cos(az));
+      }
+    }
+    mPos.needsUpdate = true;
+    men.geometry.computeVertexNormals();
+  }
   setSocketOpacity(v) { if (this._socketMats) this._socketMats.forEach(m => { m.opacity = v; m.visible = v > 0.01; }); }
   rebuildLashes(bow = this._lashBowBuilt ?? 0) {
     // Live rebuild from lashConfig — lets the user tune density/thickness at full res.
@@ -2602,6 +2703,7 @@ class EyeRenderer {
 
       this._displaceAlmondLid(ul, ua, true, width, upperThickness, gazeDir, 0, dt);
       this._displaceAlmondLid(ll, la, false, width, lowerThickness, gazeDir, lowerBow, dt);
+      this._updateMeniscusStrip(ll);   // V4.24: le prisme de larme suit la marge
       // V4.22: shader margins ride the SOFT margins (lag at fissure centre) —
       // the meniscus rests ON the lids, so it must follow their ACTUAL motion
       // (soft-skin lag included), not the muscle target ("le lacrymal ne
@@ -2773,9 +2875,12 @@ class EyeRenderer {
           const roll = Math.max(0, 1 - pv / 0.09);   // V4.12.1: fissure-relative (the
                                                      // pole-space roll was 2.5× too wide)
           if (roll > 0) {
-            const r2 = roll * roll * tGate;   // V4.12: no lip beyond the commissures
-            polar += (isUpper ? 1 : -1) * r2 * 0.022 * (0.3 + 0.7 * p.taper);
-            thickR = lerp(thickR, R * 0.974, r2 * 0.7);
+            const r2f = roll * roll * tGate;  // le PLI suit la fissure seulement
+            polar += (isUpper ? 1 : -1) * r2f * 0.022 * (0.3 + 0.7 * p.taper);
+            // V4.24: le HUG n'est plus gaté — la peau épouse le globe AUSSI aux
+            // commissures (tendons canthaux) : l'espace visible aux coins
+            // extérieurs disparaît (review utilisateur)
+            thickR = lerp(thickR, R * 0.972, roll * roll * 0.75);
           }
         }
 
