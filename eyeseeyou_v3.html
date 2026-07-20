@@ -320,8 +320,10 @@ const convergenceConfig = {
 
 // V2.8: eyelid ↔ gaze coupling strength (was hardcoded EyeMech 0.8/0.4)
 const gazeCoupling = {
-  topCoef: 0.35,   // upper lid follows gaze.y — 0 = lids static, 1 = extreme
-  botCoef: 0.18,
+  // V4.16: 0.35/0.18 était trop faible — regard plein bas avec paupière haute
+  // immobile = fixé de possédé (la vraie paupière suit le downgaze presque 1:1)
+  topCoef: 0.55,   // upper lid follows gaze.y — 0 = lids static, 1 = extreme
+  botCoef: 0.26,
 };
 
 // V3.3: live lash controls (rebuilds geometry on change — user tunes at full res)
@@ -833,11 +835,12 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     const nasal = isRight ? (1.0 - tArc) : tArc;
     const temporal = 1.0 - nasal;
     const centre = Math.pow(Math.sin(tArc * Math.PI), 0.42);
-    if (centre < 0.06) continue;
-    // V4.2: anatomical density gradient — continuous fringe centrally, thinning
-    // toward both canthi and MUCH sparser nasally (no more random 40% deletion
-    // that punched absurd gaps in the middle of the lash line)
-    const keepP = Math.min(1, Math.pow(centre, 0.6) * 1.4) * lerp(0.60, 1.0, temporal);
+    // V4.16: les cils s'ARRÊTENT avant les commissures (réel : ~2-3mm nus) —
+    // ils continuaient jusqu'aux coins et s'enroulaient sur le côté du globe
+    // en rangées d'agrafes vues par la tranche
+    if (centre < 0.14) continue;
+    const keepP = Math.min(1, Math.pow(centre, 0.6) * 1.4) * lerp(0.60, 1.0, temporal)
+      * THREE.MathUtils.smoothstep(centre, 0.12, 0.32);
     if (Math.random() > keepP) continue;
 
     const tC = startFrac + tArc * arcSpan;
@@ -866,7 +869,9 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       .addScaledVector(B, (Math.random() - 0.5) * RR * 0.004);
 
     // V4.13: cluster-shared parameters, per-hair deviation × dev
-    const lenProfile = lerp(0.50, 1.10, Math.pow(temporal, 0.9)) * (0.80 + 0.20 * centre);
+    // V4.16: shrink hard near the canthi ends
+    const lenProfile = lerp(0.50, 1.10, Math.pow(temporal, 0.9)) * (0.80 + 0.20 * centre)
+      * lerp(0.55, 1.0, THREE.MathUtils.smoothstep(centre, 0.10, 0.42));
     const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile
       * (slot.cLen + (Math.random() - 0.5) * 0.18 * dev);
     const curl = CURLM * fCurl * lerp(1.0, 0.8, temporal) * (isUpper ? 1.0 : 0.62)
@@ -1733,6 +1738,24 @@ class EyeRenderer {
       depthWrite: false, depthTest: true,
       side: THREE.FrontSide,
     });
+    // V4.16: the shell is GLASS ONLY over the corneal window — its env/clearcoat
+    // reflections wrapped the WHOLE globe and painted the big white veil on the
+    // sclera (the recurring "truc blanc"). Alpha-fades out beyond the iris.
+    corneaMat.userData.uCorneaWin = { value: 0.62 };
+    corneaMat.customProgramCacheKey = () => 'v4-cornea-window';
+    corneaMat.onBeforeCompile = (shader) => {
+      shader.uniforms.uCorneaWin = corneaMat.userData.uCorneaWin;
+      shader.vertexShader = shader.vertexShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vCPos;')
+        .replace('#include <begin_vertex>', '#include <begin_vertex>\nvCPos = position;');
+      shader.fragmentShader = shader.fragmentShader
+        .replace('#include <common>', '#include <common>\nvarying vec3 vCPos;\nuniform float uCorneaWin;')
+        .replace('#include <dithering_fragment>', `#include <dithering_fragment>
+{
+  float angC = acos(clamp(normalize(vCPos).z, -1.0, 1.0));
+  gl_FragColor.a *= 1.0 - smoothstep(uCorneaWin + 0.06, uCorneaWin + 0.26, angC);
+}`);
+    };
     const corneaGeo = new THREE.SphereGeometry(Reye * 1.002, d, d);
     const cornea = new THREE.Mesh(corneaGeo, corneaMat);
     cornea.name = 'cornea';
@@ -1998,6 +2021,10 @@ class EyeRenderer {
     const base = this._irisAngleBase ?? 0.55;
     const a = base * (1 + (this._irisGrow || 0) * 0.30 - (this._irisShrink || 0) * 0.30);
     for (const u of this.eyeUniformSets) u.uIrisAngle.value = a;
+    // V4.16: the glass shell window follows the iris size
+    for (const m of this.corneaMaterials) {
+      if (m.userData.uCorneaWin) m.userData.uCorneaWin.value = a + 0.07;
+    }
   }
   setIrisAngle(v) { this._irisAngleBase = v; this._applyIrisAngle(); }
   setFibers(v) { for (const u of this.eyeUniformSets) u.uFibers.value = v; }
@@ -3495,12 +3522,15 @@ class EyeController {
     if (this._freeze > 0.5) return;
     m.nextSaccadeIn -= dt;
     if (m.nextSaccadeIn <= 0) {
+      // V4.16: amplitudes idle plafonnées — l'ancien max (~0.75×1.5 ≈ rotation
+      // oculomotrice maximale) donnait des poses de possédé ; passé ~55% de la
+      // plage, un humain tourne la tête, pas les yeux
       const wide = Math.random() < 0.18;                     // occasional wide glance
-      const r = (wide ? 0.35 + Math.random() * 0.40 : 0.05 + Math.random() * 0.22)
-        * lerp(0.7, 1.5, st.curiosity) * frz;
+      const r = (wide ? 0.28 + Math.random() * 0.25 : 0.05 + Math.random() * 0.18)
+        * lerp(0.7, 1.2, st.curiosity) * frz;
       const a = Math.random() * Math.PI * 2;
       m.driftX = Math.cos(a) * r;
-      m.driftY = Math.sin(a) * r * 0.6;                      // vertical glances are smaller
+      m.driftY = Math.sin(a) * r * 0.5;                      // vertical glances are smaller
       const dwell = lerp(1.4, 0.6, st.alertness) + Math.random() * lerp(3.0, 1.2, st.curiosity);
       m.nextSaccadeIn = dwell;
       this._triggerPupilConstriction();
