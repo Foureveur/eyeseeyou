@@ -349,7 +349,7 @@ const blinkConfig = {
 
 // V2.4: pupil focus tunables
 const pupilFocusConfig = {
-  saccadeConstriction: 0.25,  // morph spike on each microsaccade (decays ~280ms)
+  saccadeConstriction: 0.12,  // V4.17: 0.25 → 0.12 — spikait à chaque microsaccade (~1.7/s)
   depthAccommodationRange: 0.12,  // ± range based on viewer proximity
   responseSpeed: 12,          // spring-like speed of offset transition
 };
@@ -398,7 +398,7 @@ const pupilPhysConfig = {
   // overshoots and oscillates (~1.2 Hz, damped) before settling. With the V4
   // iris tissue compression this reads as the iris itself quivering.
   accomHunt: true,
-  accomGain: 6.0,      // depth-velocity → oscillator kick
+  accomGain: 3.5,      // V4.17: 6.0 → 3.5 — la pupille bougeait beaucoup trop
 };
 
 // V4.10: HEAD orientation — the whole eye rig (globes + lids + sockets) can turn
@@ -1182,10 +1182,12 @@ const EYE_GLSL_COLOR = /* glsl */`
   float dPup = length(vec2(qBase.x / sx, qBase.y / sy));
   float pupMask = 1.0 - smoothstep(pr - 0.035, pr, dPup);
   if (uPupilHeart > 0.01) {                              // implicit heart curve
-    vec2 hq = qBase / max(pr * 1.4, 1e-3);
-    float hx = hq.x, hy = -hq.y + 0.35;
+    // V4.17: UPRIGHT (le -hq.y le rendait à l'envers — lobes en bas), bord plus
+    // net (±0.035 au lieu de ±0.08), légèrement plus grand (1.55)
+    vec2 hq = qBase / max(pr * 1.55, 1e-3);
+    float hx = hq.x, hy = hq.y + 0.35;
     float h = pow(hx * hx + hy * hy - 1.0, 3.0) - hx * hx * hy * hy * hy;
-    float heartMask = 1.0 - smoothstep(-0.08, 0.08, h);
+    float heartMask = 1.0 - smoothstep(-0.035, 0.035, h);
     pupMask = mix(pupMask, heartMask, uPupilHeart);
   }
   float ruff = (1.0 - smoothstep(pr, pr + 0.13, dPup)) * (1.0 - pupMask); // pupillary ruff
@@ -1275,6 +1277,10 @@ const EYE_GLSL_COLOR = /* glsl */`
   float mUp = smoothstep(0.032, 0.007, abs(polarL - uLidUp - 0.018));
   float mLow = smoothstep(0.032, 0.007, abs(uLidLow - polarL - 0.018));
   gMeniscus = (mUp * 0.5 + mLow) * uMeniscus;
+  // V4.17: meniscus SHADOW — the thin dark line just above the liquid strip
+  // (real menisci read as dark line + bright glint, that pairing = "liquide")
+  float menShade = smoothstep(0.045, 0.012, abs(uLidLow - polarL - 0.052));
+  eyeCol *= 1.0 - menShade * 0.12 * uMeniscus;
 
   // --- V3.11: tear-film zoning — the EXPOSED globe carries a glossy tear film,
   //     the zones sliding under the lids are drier/matte. Uniform roughness was
@@ -1292,6 +1298,9 @@ const EYE_GLSL_ROUGH = /* glsl */`
 // V4.12.1: wet gloss SOFTENED — near-mirror sclera reflected the softbox as big
 // white sheets top and bottom of the globe ("ombre blanche")
 roughnessFactor = mix(min(roughnessFactor + 0.28, 1.0), max(roughnessFactor * 0.55, 0.15), gWet);
+// V4.17: the MENISCUS strip is LIQUID — near-mirror roughness so it catches real
+// sharp specular from the key light / env (a moving glint, not a painted gradient)
+roughnessFactor = mix(roughnessFactor, 0.03, clamp(gMeniscus * 1.6, 0.0, 1.0));
 roughnessFactor = mix(roughnessFactor, uIrisRough, gEyeIrisMask);
 `;
 
@@ -3239,7 +3248,11 @@ class EyeController {
       if (PP.lastDepth === null) PP.lastDepth = depthNow;
       const dz = depthNow - PP.lastDepth;
       PP.lastDepth = depthNow;
-      PP.accV += THREE.MathUtils.clamp(dz * pupilPhysConfig.accomGain, -0.3, 0.3);
+      // V4.17: DEADBAND — le jitter de profondeur du tracking (~30 Hz) kickait
+      // l'oscillateur en permanence → pupille qui tremble sans raison. Seuls les
+      // vrais changements de distance déclenchent le hunting.
+      const dzClean = Math.abs(dz) > 0.015 ? dz : 0;
+      PP.accV += THREE.MathUtils.clamp(dzClean * pupilPhysConfig.accomGain, -0.3, 0.3);
       const w = 2 * Math.PI * 1.2;
       const cdt2 = Math.min(dt, 0.05);
       PP.accV += (-(w * w) * PP.accX - 2 * 0.22 * w * PP.accV) * cdt2;
