@@ -2616,6 +2616,60 @@ class EyeRenderer {
 
   _displaceAlmondLid(lidGroup, openAngle, isUpper, width, thickness, gazeDir, bow = 0, dtSim = 0.016) {
     if (!lidGroup) return;
+    // ============================================================
+    // V4.21: SOFT SKIN v2 — root-cause redesign after the v4.19 vibration.
+    // The old per-vertex 3D springs chased targets that micro-move EVERY frame
+    // (FEM-driven gaze coupling) → continuous resonance + per-vertex phase
+    // divergence (lumpy crawling margins). New model:
+    //   • dynamics in APERTURE space: ONE spring per column along the arc
+    //     (~100 per lid), neighbour-coupled (true damped wave), pinned at the
+    //     commissures — the margin stays a smooth curve by construction, and
+    //     outer/inner/shadow read the same field (no interpenetration possible)
+    //   • EVENT-DRIVEN excitation: only fast aperture motion (a blink, ~7 rad/s)
+    //     energizes the wobble; slow tracking/FEM drift (<0.8 rad/s) transmits
+    //     rigidly with overdamped follow — no perpetual hunting at rest
+    // ============================================================
+    {
+      const nu = LID_SEGS.u + 1;
+      let S = lidGroup.userData.soft;
+      if (!S || S.lag.length !== nu) {
+        S = lidGroup.userData.soft = {
+          lag: new Float32Array(nu), vel: new Float32Array(nu),
+          prevT: openAngle, energy: 0, init: false,
+        };
+      }
+      if (softSkinConfig.enabled) {
+        const sdtF = Math.min(dtSim, 0.033);
+        if (!S.init) { S.lag.fill(openAngle); S.prevT = openAngle; S.init = true; }
+        const tVel = (openAngle - S.prevT) / Math.max(sdtF, 1e-4);
+        S.prevT = openAngle;
+        S.energy = Math.min(1.5, S.energy * Math.exp(-sdtF * 3.5)
+          + Math.max(0, Math.abs(tVel) - 0.8) * 0.25);
+        const zeta = lerp(1.15, lerp(0.5, 1.1, softSkinConfig.viscosity), Math.min(1, S.energy));
+        const sub = 2, sdt = sdtF / sub;              // substeps → stable even at 30fps
+        for (let s = 0; s < sub; s++) {
+          for (let i = 0; i < nu; i++) {
+            const az = (-0.5 + i / LID_SEGS.u) * Math.PI * 2;
+            const fa = Math.abs(az);
+            const taperC = fa < FISSURE_A ? Math.sin(((az + FISSURE_A) / (2 * FISSURE_A)) * Math.PI) : 0;
+            const softW = taperC * softSkinConfig.softness;
+            if (softW < 0.03) { S.lag[i] = openAngle; S.vel[i] = 0; continue; }
+            const k = lerp(2400, 320, softW);
+            const dmp = 2 * zeta * Math.sqrt(k);
+            const nb = S.lag[Math.max(0, i - 1)] + S.lag[Math.min(nu - 1, i + 1)] - 2 * S.lag[i];
+            S.vel[i] += ((openAngle - S.lag[i]) * k + nb * 500 - dmp * S.vel[i]) * sdt;
+            S.lag[i] += S.vel[i] * sdt;
+            const dl = S.lag[i] - openAngle;           // lag clamp + velocity kill
+            if (dl > 0.10) { S.lag[i] = openAngle + 0.10; S.vel[i] *= 0.4; }
+            else if (dl < -0.10) { S.lag[i] = openAngle - 0.10; S.vel[i] *= 0.4; }
+          }
+        }
+      } else if (S.init) {
+        S.lag.fill(openAngle); S.vel.fill(0); S.prevT = openAngle;
+      }
+    }
+    const Ssoft = lidGroup.userData.soft;
+    const useLag = softSkinConfig.enabled && Ssoft && Ssoft.init;
     lidGroup.traverse(mesh => {
       if (!mesh.isMesh) return;
       const geo = mesh.geometry;
@@ -2630,27 +2684,8 @@ class EyeRenderer {
       const isShadow = mesh.name === 'shadow';
       const thickSign = isInner ? -0.04 : 0.07;
 
-      // V4.19.1: soft-skin — la sim ne tourne que sur la nappe EXTERNE ; l'interne
-      // COPIE ses offsets (les deux peaux bougent d'un seul tenant — deux sims
-      // indépendantes se transperçaient : peau en lambeaux + vibration)
-      const doSim = softSkinConfig.enabled && !isShadow && !isInner;
-      const innerFollow = softSkinConfig.enabled && isInner;
-      const outerOff = innerFollow
-        ? (lidGroup.getObjectByName('outer')?.userData?.simOff || null) : null;
-      let simP = null, simV = null, simOff = null;
-      if (doSim) {
-        if (!mesh.userData.simPos || mesh.userData.simPos.length !== pos.count * 3) {
-          mesh.userData.simPos = new Float32Array(pos.count * 3);
-          mesh.userData.simVel = new Float32Array(pos.count * 3);
-          mesh.userData.simOff = new Float32Array(pos.count * 3);
-          mesh.userData.simInit = false;
-        }
-        simP = mesh.userData.simPos;
-        simV = mesh.userData.simVel;
-        simOff = mesh.userData.simOff;
-      }
-      const sdt = Math.min(dtSim, 0.033);
-      const zeta = lerp(0.5, 1.2, softSkinConfig.viscosity);
+      // V4.21: the per-vertex 3D spring state is gone — every mesh of the lid
+      // reads the SAME per-column aperture-lag field computed above.
 
       for (let j = 0; j < pos.count; j++) {
         const p = vp[j];
@@ -2661,7 +2696,10 @@ class EyeRenderer {
         // the fissure taper, so the commissures stay pinned and the lid opens/
         // closes like a zipper from the corners (orbicularis/levator activation),
         // instead of the whole sheet sliding uniformly like a shutter.
-        const openShift = openAngle * edgeInfluence * (p.taper !== undefined ? p.taper : 1);
+        // V4.21: the aperture angle is read from the soft-skin lag field (per
+        // column along the arc) — the margin whips/waves after a blink.
+        const effAngle = useLag ? Ssoft.lag[Math.round(p.u * LID_SEGS.u)] : openAngle;
+        const openShift = effAngle * edgeInfluence * (p.taper !== undefined ? p.taper : 1);
         const adjAzimuth = p.baseAzimuth * width;
         // V3: the outer surface follows a skin profile (margin ridge, hollow,
         // fold bulge) instead of a linear shell falloff — draped skin, not a cap.
@@ -2708,60 +2746,10 @@ class EyeRenderer {
         z *= (1 + bulge);
 
         const j3 = j * 3;
-        // V4.19: SOFT SKIN — the vertex springs toward its target instead of
-        // teleporting. Pinned (rigid) at crease/commissures, softest at the
-        // central margin → the margin lags and wobbles like real loose skin.
-        if (doSim) {
-          if (!mesh.userData.simInit) {
-            simP[j3] = x; simP[j3 + 1] = y; simP[j3 + 2] = z;
-          }
-          const softW = (p.taper ?? 0) * Math.pow(1 - Math.min(1, pv), 1.5) * softSkinConfig.softness;
-          if (softW > 0.02) {
-            const k = lerp(2600, 420, softW);
-            const dmp = 2 * zeta * Math.sqrt(k);
-            let ox = simP[j3] - x, oy = simP[j3 + 1] - y, oz = simP[j3 + 2] - z;
-            simV[j3]     += (-k * ox - dmp * simV[j3]) * sdt;
-            simV[j3 + 1] += (-k * oy - dmp * simV[j3 + 1]) * sdt;
-            simV[j3 + 2] += (-k * oz - dmp * simV[j3 + 2]) * sdt;
-            simP[j3]     += simV[j3] * sdt;
-            simP[j3 + 1] += simV[j3 + 1] * sdt;
-            simP[j3 + 2] += simV[j3 + 2] * sdt;
-            // V4.19.1: strain limit resserrée SOUS l'épaisseur de la paupière
-            // (2% du rayon) + la vitesse est amortie au clamp — la projection
-            // seule laissait l'énergie s'accumuler → vibration permanente
-            ox = simP[j3] - x; oy = simP[j3 + 1] - y; oz = simP[j3 + 2] - z;
-            const ol = Math.sqrt(ox * ox + oy * oy + oz * oz);
-            const om = R * 0.02;
-            if (ol > om) {
-              const sc = om / ol;
-              simP[j3] = x + ox * sc; simP[j3 + 1] = y + oy * sc; simP[j3 + 2] = z + oz * sc;
-              simV[j3] *= 0.4; simV[j3 + 1] *= 0.4; simV[j3 + 2] *= 0.4;
-            }
-            simOff[j3] = simP[j3] - x;
-            simOff[j3 + 1] = simP[j3 + 1] - y;
-            simOff[j3 + 2] = simP[j3 + 2] - z;
-            pos.array[j3] = simP[j3];
-            pos.array[j3 + 1] = simP[j3 + 1];
-            pos.array[j3 + 2] = simP[j3 + 2];
-          } else {
-            // rigid zone: follow the target exactly, keep the sim state in sync
-            simP[j3] = x; simP[j3 + 1] = y; simP[j3 + 2] = z;
-            simV[j3] = simV[j3 + 1] = simV[j3 + 2] = 0;
-            simOff[j3] = simOff[j3 + 1] = simOff[j3 + 2] = 0;
-            pos.array[j3] = x; pos.array[j3 + 1] = y; pos.array[j3 + 2] = z;
-          }
-        } else if (innerFollow && outerOff) {
-          // V4.19.1: l'interne suit les offsets de l'externe — un seul tissu
-          pos.array[j3] = x + outerOff[j3];
-          pos.array[j3 + 1] = y + outerOff[j3 + 1];
-          pos.array[j3 + 2] = z + outerOff[j3 + 2];
-        } else {
-          pos.array[j3] = x;
-          pos.array[j3 + 1] = y;
-          pos.array[j3 + 2] = z;
-        }
+        pos.array[j3] = x;
+        pos.array[j3 + 1] = y;
+        pos.array[j3 + 2] = z;
       }
-      if (doSim) mesh.userData.simInit = true;
       pos.needsUpdate = true;
     });
 
