@@ -160,6 +160,8 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Lashes</label><input type="range" id="p-lashesShow" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
   <div class="pr"><label>Skin Texture</label><input type="range" id="p-skinTexture" min="0" max="0.01" step="0.001" value="0.003"><span class="v">0.003</span></div>
   <div class="pr"><label>Peach Fuzz</label><input type="range" id="p-skinFuzz" min="0" max="1" step="0.02" value="0.45"><span class="v">0.45</span></div>
+  <div class="pr"><label>Skin Detail</label><input type="range" id="p-skinDetail" min="0" max="2" step="0.05" value="0.8"><span class="v">0.80</span></div>
+  <div class="pr"><label>Skin SSS</label><input type="range" id="p-skinSSS" min="0" max="2" step="0.05" value="1"><span class="v">1.00</span></div>
 
   <h3>Eyebrows</h3>
   <div class="pr"><label>Show</label><input type="range" id="p-browShow" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
@@ -618,6 +620,72 @@ function generateSkinBumpTexture(size = 512) {
       const wrinkle = Math.pow(1 - Math.abs(2 * wr - 1), 3);
       const val = 128 + (n - 0.5) * 70 - wrinkle * 42 + (Math.random() - 0.5) * 10;
       data[i] = data[i + 1] = data[i + 2] = Math.max(0, Math.min(255, val));
+      data[i + 3] = 255;
+    }
+  }
+  ctx.putImageData(img, 0, 0);
+  const tex = new THREE.CanvasTexture(canvas);
+  tex.wrapS = tex.wrapT = THREE.RepeatWrapping;
+  tex.repeat.set(3, 1.5);
+  return tex;
+}
+
+// V4.27 (Sprint C): SKIN NORMAL MAP — a real tangent-space normal map derived by
+// Sobel from a richer height field than the bump: sharp pore pits, fine wrinkle
+// lines that follow the lid arc (u), crossing diagonal micro-creases. A normal
+// map shades crisper than a bumpMap (analytic derivatives, no runtime blur) —
+// this is what makes the skin read as MATTER in close-up.
+function generateSkinNormalTexture(size = 1024) {
+  const G = 96;
+  const grid = new Float32Array(G * G);
+  for (let i = 0; i < G * G; i++) grid[i] = Math.random();
+  const samp = (x, y) => {
+    const xw = ((x % G) + G) % G, yw = ((y % G) + G) % G;
+    const xi = Math.floor(xw), yi = Math.floor(yw);
+    const xf = xw - xi, yf = yw - yi;
+    const sm = (a, b, t) => a + (b - a) * (t * t * (3 - 2 * t));
+    const a = grid[yi * G + xi], b = grid[yi * G + ((xi + 1) % G)];
+    const c = grid[((yi + 1) % G) * G + xi], d = grid[((yi + 1) % G) * G + ((xi + 1) % G)];
+    return sm(sm(a, b, xf), sm(c, d, xf), yf);
+  };
+  // Height field, wrapping in both axes (RepeatWrapping-safe)
+  const H = new Float32Array(size * size);
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const u = x / size, v = y / size;
+      let n = 0, amp = 1, f = 6;
+      for (let o = 0; o < 4; o++) { n += samp(u * f, v * f) * amp; amp *= 0.55; f *= 2.1; }
+      n /= 2.1;
+      // pore pits: sharp minima punched where blob noise peaks
+      const pb = samp(u * 48 + 7.3, v * 48 + 2.9);
+      const pore = Math.pow(Math.max(0, (pb - 0.72) / 0.28), 1.6);
+      // wrinkle lines along the arc (u), denser toward one edge
+      const w1 = samp(u * 120, v * 9 + 31.7);
+      const line1 = Math.pow(1 - Math.abs(2 * w1 - 1), 6);
+      // crossing diagonal micro-creases (rotated coords ±40°)
+      const w2 = samp((u * 0.77 + v * 0.64) * 70, (v * 0.77 - u * 0.64) * 70 + 11.1);
+      const w3 = samp((u * 0.77 - v * 0.64) * 70 + 5.5, (v * 0.77 + u * 0.64) * 70);
+      const cross = Math.pow(1 - Math.abs(2 * w2 - 1), 8) + Math.pow(1 - Math.abs(2 * w3 - 1), 8);
+      H[y * size + x] = n * 0.45 - pore * 0.55 - line1 * 0.30 - cross * 0.10;
+    }
+  }
+  // Sobel → tangent-space normal (OpenGL convention, +Y up; CanvasTexture flipY)
+  const canvas = document.createElement('canvas');
+  canvas.width = canvas.height = size;
+  const ctx = canvas.getContext('2d');
+  const img = ctx.createImageData(size, size);
+  const data = img.data;
+  const at = (x, y) => H[(((y % size) + size) % size) * size + (((x % size) + size) % size)];
+  const K = size * 0.55;  // slope gain — the normalScale slider refines from here
+  for (let y = 0; y < size; y++) {
+    for (let x = 0; x < size; x++) {
+      const dx = (at(x + 1, y) - at(x - 1, y)) * 0.5 * K / size;
+      const dy = (at(x, y + 1) - at(x, y - 1)) * 0.5 * K / size;
+      const inv = 1 / Math.sqrt(dx * dx + dy * dy + 1);
+      const i = (y * size + x) * 4;
+      data[i]     = Math.round(((-dx * inv) * 0.5 + 0.5) * 255);
+      data[i + 1] = Math.round(((dy * inv) * 0.5 + 0.5) * 255);  // flipY → +dy is up
+      data[i + 2] = Math.round((inv * 0.5 + 0.5) * 255);
       data[i + 3] = 255;
     }
   }
@@ -1450,17 +1518,40 @@ const EYE_GLSL_RIM = /* glsl */`
 }
 `;
 
+// V4.27 (Sprint C): pre-integrated SSS — shared uniforms. Every skin material
+// references the SAME objects; the render loop refreshes the view-space key-light
+// direction once per frame, the "Skin SSS" slider drives the global strength.
+const SSS_SHARED = {
+  dir: { value: new THREE.Vector3(0.45, 0.55, 0.70) },  // key light dir, VIEW space
+  strength: { value: 1.0 },
+};
+
 // V3 — eyelid skin shader: albedo ramp by lid coordinate (lash-line margin darker
 // and redder, crease fold shaded, mottled pigmentation) + the V2 SSS warm rim.
 // Applied per material INSTANCE (three.js Material.clone() drops onBeforeCompile,
 // which silently disabled the V2 SSS on the rendered clones — fixed here).
+// V4.27: + pre-integrated SSS — a red band that hugs the light terminator and a
+// backlit transmission term, both weighted by skin thinness (margin = thinnest).
+// opts.plain (V4.28, periorbital mask): skip the lid-specific margin/crease bands.
 function applyLidSkinShader(mat, opts = {}) {
   mat.userData.sssIntensity = { value: opts.sss ?? 0.22 };
   mat.userData.marginTint = { value: opts.margin ?? 0.85 };
-  mat.customProgramCacheKey = () => 'v3-lid-skin';
+  const plain = !!opts.plain;
+  mat.customProgramCacheKey = () => 'v3-lid-skin' + (plain ? '-plain' : '');
+  const lidBands = plain ? '' : `
+  float marginBand = smoothstep(0.30, 0.02, lv);          // lash-line margin: darker + redder
+  vec3 marginCol = diffuseColor.rgb * vec3(0.62, 0.42, 0.38);
+  diffuseColor.rgb = mix(diffuseColor.rgb, marginCol, marginBand * uMarginTint);
+  float crease = smoothstep(0.60, 0.84, lv) * (1.0 - smoothstep(0.84, 1.0, lv));
+  diffuseColor.rgb *= 1.0 - crease * 0.16;                // fold shading
+  float rootLine = smoothstep(0.10, 0.0, lv);             // lash-root shadow band
+  diffuseColor.rgb *= 1.0 - rootLine * 0.62;              // V4.10: deeper — the dark
+                                                          // margin line IS the eye's contrast`;
   mat.onBeforeCompile = (shader) => {
     shader.uniforms.sssIntensity = mat.userData.sssIntensity;
     shader.uniforms.uMarginTint = mat.userData.marginTint;
+    shader.uniforms.uSssDir = SSS_SHARED.dir;
+    shader.uniforms.uSssK = SSS_SHARED.strength;
     shader.vertexShader = shader.vertexShader
       .replace('#include <common>', '#include <common>\nvarying vec2 vLidUv;')
       .replace('#include <begin_vertex>', '#include <begin_vertex>\nvLidUv = uv;');
@@ -1469,23 +1560,32 @@ function applyLidSkinShader(mat, opts = {}) {
 varying vec2 vLidUv;
 uniform float sssIntensity;
 uniform float uMarginTint;
+uniform vec3 uSssDir;
+uniform float uSssK;
 ${EYE_GLSL_NOISE}`)
       .replace('#include <color_fragment>', `#include <color_fragment>
 {
   float lv = vLidUv.y;                                    // 0 = lash line, 1 = crease
-  float marginBand = smoothstep(0.30, 0.02, lv);          // lash-line margin: darker + redder
-  vec3 marginCol = diffuseColor.rgb * vec3(0.62, 0.42, 0.38);
-  diffuseColor.rgb = mix(diffuseColor.rgb, marginCol, marginBand * uMarginTint);
-  float crease = smoothstep(0.60, 0.84, lv) * (1.0 - smoothstep(0.84, 1.0, lv));
-  diffuseColor.rgb *= 1.0 - crease * 0.16;                // fold shading
-  float rootLine = smoothstep(0.10, 0.0, lv);             // lash-root shadow band
-  diffuseColor.rgb *= 1.0 - rootLine * 0.62;              // V4.10: deeper — the dark
-                                                          // margin line IS the eye's contrast
+${lidBands}
   float mott = eyeFbm(vLidUv * vec2(18.0, 7.0));          // pigment mottling
   float mott2 = eyeNoise(vLidUv * vec2(60.0, 24.0) + 13.1);
   diffuseColor.rgb *= 0.94 + 0.11 * mott;
   diffuseColor.rgb = mix(diffuseColor.rgb, diffuseColor.rgb * vec3(1.05, 0.92, 0.90), mott2 * 0.22);
 }`)
+      .replace('#include <tonemapping_fragment>', `
+{
+  // V4.27: pre-integrated SSS, in LINEAR space before tonemapping. The red band
+  // sits on the light terminator (where flesh glows through), the transmission
+  // term lights the skin from behind; both scale with thinness toward the margin.
+  vec3 _sn = normalize(vNormal);
+  float _ndl = dot(_sn, normalize(uSssDir));
+  float _thin = ${plain ? '0.40' : '0.45 + 0.75 * smoothstep(0.5, 0.0, vLidUv.y)'};
+  float _term = exp(-pow(_ndl - 0.10, 2.0) * 7.0);
+  gl_FragColor.rgb += vec3(0.42, 0.10, 0.05) * _term * _thin * (sssIntensity * 2.2) * uSssK;
+  float _back = clamp(-_ndl, 0.0, 1.0);
+  gl_FragColor.rgb += vec3(0.55, 0.16, 0.08) * pow(_back, 1.5) * _thin * 0.30 * uSssK;
+}
+#include <tonemapping_fragment>`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
 float _rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
 vec3 _warm = vec3(0.90, 0.35, 0.25);
@@ -1928,6 +2028,7 @@ class EyeRenderer {
     const lidParams = { cornerSharp: 0.95, outerAngle: isRight ? -0.08 : 0.08, creaseDepth: 1.0 };
 
     if (!this._skinBumpTex) this._skinBumpTex = generateSkinBumpTexture();
+    if (!this._skinNormalTex) this._skinNormalTex = generateSkinNormalTexture(IS_MOBILE ? 512 : 1024);
 
     // Base materials. The skin shader (albedo ramp + SSS rim) is applied per
     // INSTANCE after cloning — Material.clone() drops onBeforeCompile, which is
@@ -1939,6 +2040,8 @@ class EyeRenderer {
       envMapIntensity: 0.4, vertexColors: true,
       bumpMap: this._skinBumpTex,
       bumpScale: 0.003,
+      normalMap: this._skinNormalTex,               // V4.27: pores + micro-rides
+      normalScale: new THREE.Vector2(0.8, 0.8),
       side: THREE.FrontSide, depthWrite: true, depthTest: true,
     });
     const innerLidMat = new THREE.MeshPhysicalMaterial({
@@ -2573,6 +2676,12 @@ class EyeRenderer {
     }
   }
 
+  // V4.27: normal-map strength (pores + micro-rides) sur toute la peau
+  setSkinDetail(v) {
+    const mats = [...(this._lidSkinMats || []), ...(this._periorbMats || [])];
+    mats.forEach(m => { if (m.normalScale) m.normalScale.set(v, v); });
+  }
+
   setGaze(gx, gy, vergence, globeRotate, cyclops, faceZ = 0.5, convergenceOn = true) {
     const maxRot = Math.PI / 5;
     const gr = globeRotate;
@@ -2978,6 +3087,12 @@ class EyeRenderer {
   }
 
   render() {
+    // V4.27: refresh the shared view-space key-light direction for the SSS shader
+    if (this.keyLight) {
+      this.camera.updateMatrixWorld();
+      SSS_SHARED.dir.value.copy(this.keyLight.position).normalize()
+        .transformDirection(this.camera.matrixWorldInverse);
+    }
     if (photoConfig.enabled && this.composer) {
       // V4.26: bloom serré (catchlights) par défaut ; le slider `halo` élargit le
       // rayon et abaisse le seuil pour reproduire le halo de fond derrière les yeux
@@ -3134,6 +3249,8 @@ class EyeController {
       lidEdgeShow: 1,   // V4.15.1: tranches VISIBLES (mal lu la demande) — c'est le
                         // liseré sombre qui contraste ; seul le look muqueuse rose dégage
       skinFuzz: 0.45,   // V4.18: duvet vellus (peach fuzz) sur la peau des paupières
+      skinDetail: 0.8,  // V4.27: normal map (pores + micro-rides)
+      skinSSS: 1.0,     // V4.27: SSS pré-intégré (terminator + transmission)
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#53332e',
       lidOuterAngle: 0.08, lidRoughness: 0.65, lidSheen: 1.0, lidClearcoat: 0.05,
       // V4.1: realistic proportions — human IPD ≈ 5.2× the eyeball radius; the old
@@ -4698,6 +4815,8 @@ class DebugUI {
       case 'lidSheen': r.setLidSheen(val); break;
       case 'lidClearcoat': r.setLidClearcoat(val); break;
       case 'skinTexture': r.setSkinTexture(val); break;
+      case 'skinDetail': r.setSkinDetail(val); break;        // V4.27
+      case 'skinSSS': SSS_SHARED.strength.value = val; break; // V4.27
       case 'skinFuzz':
         if (r._fuzzMats) r._fuzzMats.forEach(m => { m.opacity = val * 0.9; m.visible = val > 0.02; });
         break;
@@ -4812,6 +4931,8 @@ async function main() {
   renderer.setVeins(p.veins);
   renderer.setMeniscus(p.meniscus);
   renderer.setSocketOpacity(p.socket);
+  renderer.setSkinDetail(p.skinDetail);            // V4.27
+  SSS_SHARED.strength.value = p.skinSSS;           // V4.27
   renderer.setLimbusDark(p.limbusDark);
   renderer.setEyeIor(p.corneaIor);
   renderer.setScleraRoughness(p.scleraRoughness);
