@@ -159,7 +159,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Lid Clearcoat</label><input type="range" id="p-lidClearcoat" min="0" max="1" step="0.01" value="0.05"><span class="v">0.05</span></div>
   <div class="pr"><label>Lashes</label><input type="range" id="p-lashesShow" min="0" max="1" step="1" value="1"><span class="v">1</span></div>
   <div class="pr"><label>Skin Texture</label><input type="range" id="p-skinTexture" min="0" max="0.01" step="0.001" value="0.003"><span class="v">0.003</span></div>
-  <div class="pr"><label>Peach Fuzz</label><input type="range" id="p-skinFuzz" min="0" max="1" step="0.02" value="0.45"><span class="v">0.45</span></div>
+  <div class="pr"><label>Peach Fuzz</label><input type="range" id="p-skinFuzz" min="0" max="1" step="0.02" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Skin Detail</label><input type="range" id="p-skinDetail" min="0" max="2" step="0.05" value="0.8"><span class="v">0.80</span></div>
   <div class="pr"><label>Skin SSS</label><input type="range" id="p-skinSSS" min="0" max="2" step="0.05" value="1"><span class="v">1.00</span></div>
 
@@ -680,7 +680,9 @@ function generateSkinNormalTexture(size = 1024) {
       const w2 = samp((u * 0.77 + v * 0.64) * 70, (v * 0.77 - u * 0.64) * 70 + 11.1);
       const w3 = samp((u * 0.77 - v * 0.64) * 70 + 5.5, (v * 0.77 + u * 0.64) * 70);
       const cross = Math.pow(1 - Math.abs(2 * w2 - 1), 8) + Math.pow(1 - Math.abs(2 * w3 - 1), 8);
-      H[y * size + x] = n * 0.45 - pore * 0.55 - line1 * 0.30 - cross * 0.10;
+      // V4.30: cross 0.10 → 0.03 — le maillage de plis croisés lisait comme de la
+      // peau scrotale ; une paupière n'a que des plis qui suivent l'arc (orbiculaire)
+      H[y * size + x] = n * 0.45 - pore * 0.55 - line1 * 0.34 - cross * 0.03;
     }
   }
   // Sobel → tangent-space normal (OpenGL convention, +Y up; CanvasTexture flipY)
@@ -3361,7 +3363,8 @@ class EyeController {
       lashesShow: 1, skinTexture: 0.003,
       lidEdgeShow: 1,   // V4.15.1: tranches VISIBLES (mal lu la demande) — c'est le
                         // liseré sombre qui contraste ; seul le look muqueuse rose dégage
-      skinFuzz: 0.45,   // V4.18: duvet vellus (peach fuzz) sur la peau des paupières
+      skinFuzz: 0,      // V4.30: OFF par défaut — duvet + normal map = « peau de couilles »
+                        // (feedback Quentin) ; le slider reste pour le réactiver
       skinDetail: 0.8,  // V4.27: normal map (pores + micro-rides)
       skinSSS: 1.0,     // V4.27: SSS pré-intégré (terminator + transmission)
       lidSkinColor: '#c4956a', lidLowerColor: '#c4956a', lidEdgeColor: '#53332e',
@@ -5525,7 +5528,15 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     if (m > 0) {
       const eye = (macroConfig.side === 'right' ? renderer.right : renderer.left) || renderer.left;
       eye.group.getWorldPosition(_macroTgt);
-      const dist = 1.55 / macroConfig.zoom;
+      // V4.30: la caméra ne pénètre JAMAIS le globe (le shader de réfraction lit la
+      // position caméra → garbage dès qu'on passe sous la cornée). Plancher de
+      // distance ∝ eyeScale ; le grossissement au-delà vient du FOV (longue focale).
+      const wanted = 1.55 / macroConfig.zoom;
+      const floorD = Math.max(0.9, p.eyeScale * 1.5);
+      const dist = Math.max(wanted, floorD);
+      const fovK = Math.min(1, wanted / dist);      // <1 = le FOV prend le relais
+      renderer.camera.fov = 38 * (1 + (fovK - 1) * m);
+      renderer.camera.updateProjectionMatrix();
       _macroPos.set(_macroTgt.x + drx + 0.10, _macroTgt.y + dry + 0.05, _macroTgt.z + dist);
       renderer.camera.position.set(
         drx + (_macroPos.x - drx) * m,
@@ -5543,6 +5554,7 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
       renderer.camera.position.y = dry;
       renderer.camera.position.z = 5;
       renderer.camera.rotation.set(0, 0, 0);
+      if (renderer.camera.fov !== 38) { renderer.camera.fov = 38; renderer.camera.updateProjectionMatrix(); }
     }
     // V4.10: head orientation (+ optional idle sway) — the gaze compensates in
     // setGaze, so the eyes keep looking at the tracked target while the head turns
