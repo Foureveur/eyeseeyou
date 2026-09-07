@@ -174,6 +174,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
   <div class="pr"><label>Tilt</label><input type="range" id="p-eyeTilt" min="-0.5" max="0.5" step="0.01" value="0"><span class="v">0.00</span></div>
   <div class="pr"><label>Cyclops</label><input type="range" id="p-cyclops" min="0" max="1" step="1" value="0"><span class="v">0</span></div>
   <div class="pr"><label>Halo (socket)</label><input type="range" id="p-socket" min="0" max="1" step="0.02" value="0"><span class="v">0.00</span></div>
+  <div class="pr"><label>Periorbital</label><input type="range" id="p-periorb" min="0" max="1" step="0.02" value="1"><span class="v">1.00</span></div>
 
   <h3>Tracking</h3>
   <div class="pr"><label>Smoothing</label><input type="range" id="p-smoothing" min="0.02" max="0.25" step="0.01" value="0.07"><span class="v">0.07</span></div>
@@ -1580,16 +1581,25 @@ ${lidBands}
   vec3 _sn = normalize(vNormal);
   float _ndl = dot(_sn, normalize(uSssDir));
   float _thin = ${plain ? '0.40' : '0.45 + 0.75 * smoothstep(0.5, 0.0, vLidUv.y)'};
+  // plain (periorbital): scale by albedo so the vertex-darkened rim stays DARK
+  float _alb = ${plain ? 'clamp(dot(diffuseColor.rgb, vec3(1.5)), 0.0, 1.0)' : '1.0'};
   float _term = exp(-pow(_ndl - 0.10, 2.0) * 7.0);
-  gl_FragColor.rgb += vec3(0.42, 0.10, 0.05) * _term * _thin * (sssIntensity * 2.2) * uSssK;
+  gl_FragColor.rgb += vec3(0.42, 0.10, 0.05) * _term * _thin * _alb * (sssIntensity * 2.2) * uSssK;
   float _back = clamp(-_ndl, 0.0, 1.0);
-  gl_FragColor.rgb += vec3(0.55, 0.16, 0.08) * pow(_back, 1.5) * _thin * 0.30 * uSssK;
+  gl_FragColor.rgb += vec3(0.55, 0.16, 0.08) * pow(_back, 1.5) * _thin * _alb * 0.30 * uSssK;
 }
 #include <tonemapping_fragment>`)
       .replace('#include <dithering_fragment>', `#include <dithering_fragment>
 float _rim = pow(1.0 - abs(dot(normalize(vNormal), normalize(vViewPosition))), 2.0);
+float _ralb = ${plain ? 'clamp(dot(diffuseColor.rgb, vec3(1.5)), 0.0, 1.0)' : '1.0'};
 vec3 _warm = vec3(0.90, 0.35, 0.25);
-gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * sssIntensity);`);
+gl_FragColor.rgb = mix(gl_FragColor.rgb, _warm, _rim * _ralb * sssIntensity);${plain ? `
+// periorbital: ALPHA melt by radial coordinate (uv.y = t*2) — sheen and specular
+// ignore vertex colors, so darkness alone leaves a gray disc silhouette; alpha
+// is the only way the outer rim truly vanishes into the background.
+float _pt = vLidUv.y * 0.5;
+float _pf = clamp((_pt - 0.14) / 0.42, 0.0, 1.0);
+gl_FragColor.a *= pow(1.0 - _pf, 1.6);` : ''}`);
   };
 }
 
@@ -2296,6 +2306,87 @@ class EyeRenderer {
     this._socketMats = this._socketMats || [];
     this._socketMats.push(sockMat);
 
+    // V4.28 (roadmap Sprint D): PERIORBITAL MASK — real 3D flesh around the eye,
+    // replacing the flat socket sprite. An annulus deformed into brow ridge above,
+    // cheekbone below and nasal wall toward the center; vertex colors carry the
+    // socket-crease shadow near the eye and sink to near-black at the outer rim so
+    // the flesh melts into the background instead of ending on an edge.
+    {
+      const nasal = isRight ? -1 : 1;             // local +x direction of the nose
+      const rIn = Reye * 1.01, rOut = Reye * 3.1;
+      const NA = 96, NR = 26;
+      const pos = [], col = [], uvs = [], idx = [];
+      const bump = (t, c, w) => Math.exp(-((t - c) / w) * ((t - c) / w));
+      for (let ir = 0; ir <= NR; ir++) {
+        const t = Math.pow(ir / NR, 1.15);        // finer rings near the eye
+        const r = rIn + (rOut - rIn) * t;
+        for (let ia = 0; ia <= NA; ia++) {        // seam duplicated at ia = NA
+          const a = (ia / NA) * Math.PI * 2;
+          const ca = Math.cos(a), sa = Math.sin(a);
+          const dn = Math.max(0, ca * nasal);     // 1 = pure nasal direction
+          const up = Math.max(0, sa), down = Math.max(0, -sa);
+          const rr = r * (1 - 0.16 * dn * t);     // nasal side sits closer to the eye
+          const x = ca * rr, y = sa * rr * 0.82;  // orbit is wider than tall
+          let z = Reye * (0.18 * (1 - t) * (1 - t) - 0.85 * t);
+          z += Reye * 0.42 * Math.pow(up, 1.6) * bump(t, 0.30, 0.20);    // brow ridge
+          z += Reye * 0.24 * Math.pow(down, 1.4) * bump(t, 0.35, 0.26);  // cheekbone
+          z += Reye * 0.30 * dn * dn * Math.min(1, Math.max(0, (t - 0.30) / 0.35)); // nose wall
+          z -= Reye * 0.10 * dn * (1 - t);                               // canthus dip
+          pos.push(x, y, z);
+          // shading baked in vertex colors: crease ring, brow AO, black outer melt.
+          // The lit flesh must NOT ring the eye — only brow (up) and cheek (down)
+          // catch light, the temporal/nasal sides recede into darkness first, and
+          // everything is pitch black past ~half the radius. Eyes emerge from dark.
+          let sh = 0.50;
+          sh *= 1 - 0.55 * bump(t, 0.10, 0.10);           // socket crease shadow
+          sh *= 1 - 0.25 * up * bump(t, 0.22, 0.12);      // AO under the brow
+          sh *= 0.40 + 0.60 * Math.pow(Math.max(up, down), 1.3);  // sides go dark
+          const f = Math.min(1, Math.max(0, (t - 0.14) / 0.42));
+          sh *= Math.pow(1 - f, 2.6);                     // melt into the dark
+          col.push(sh, sh * (0.97 - 0.05 * (1 - t)), sh * (0.95 - 0.08 * (1 - t)));
+          uvs.push((ia / NA) * 4, t * 2);
+        }
+      }
+      const W = NA + 1;
+      for (let ir = 0; ir < NR; ir++) for (let ia = 0; ia < NA; ia++) {
+        const a0 = ir * W + ia, b0 = a0 + 1, c0 = a0 + W, d0 = c0 + 1;
+        idx.push(a0, c0, b0, b0, c0, d0);
+      }
+      const periGeo = new THREE.BufferGeometry();
+      periGeo.setAttribute('position', new THREE.Float32BufferAttribute(pos, 3));
+      periGeo.setAttribute('color', new THREE.Float32BufferAttribute(col, 3));
+      periGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+      periGeo.setIndex(idx);
+      periGeo.computeVertexNormals();
+      // stitch the duplicated seam normals (a=0 and a=2π are the same points)
+      const nrm = periGeo.getAttribute('normal');
+      for (let ir = 0; ir <= NR; ir++) {
+        const i0 = ir * W, i1 = ir * W + NA;
+        const nx = (nrm.getX(i0) + nrm.getX(i1)) / 2, ny = (nrm.getY(i0) + nrm.getY(i1)) / 2,
+              nz = (nrm.getZ(i0) + nrm.getZ(i1)) / 2;
+        nrm.setXYZ(i0, nx, ny, nz); nrm.setXYZ(i1, nx, ny, nz);
+      }
+      if (!this._skinBumpTex) this._skinBumpTex = generateSkinBumpTexture();
+      if (!this._skinNormalTex) this._skinNormalTex = generateSkinNormalTexture(IS_MOBILE ? 512 : 1024);
+      const periMat = new THREE.MeshPhysicalMaterial({
+        color: 0xc4956a, roughness: 0.82, metalness: 0.0,
+        sheen: 0.12, sheenColor: new THREE.Color(0xeeddcc), sheenRoughness: 0.7,
+        envMapIntensity: 0.06, vertexColors: true,
+        bumpMap: this._skinBumpTex, bumpScale: 0.003,
+        normalMap: this._skinNormalTex, normalScale: new THREE.Vector2(0.8, 0.8),
+        side: THREE.FrontSide, depthWrite: false, depthTest: true,
+        transparent: true,   // the shader's radial alpha melt needs blending
+      });
+      applyLidSkinShader(periMat, { plain: true, sss: 0.14 });
+      const periMesh = new THREE.Mesh(periGeo, periMat);
+      periMesh.name = 'periorbital';
+      periMesh.renderOrder = 0;
+      periMesh.position.z = isRight ? -0.004 : 0.004;  // twin masks overlap mid-face
+      group.add(periMesh);
+      this._periorbMats = this._periorbMats || [];
+      this._periorbMats.push(periMat);
+    }
+
     // Procedural eyebrow — tapered tube above the eye
     const bR = Reye;
     const browCurve = new THREE.QuadraticBezierCurve3(
@@ -2434,6 +2525,15 @@ class EyeRenderer {
     men.geometry.computeVertexNormals();
   }
   setSocketOpacity(v) { if (this._socketMats) this._socketMats.forEach(m => { m.opacity = v; m.visible = v > 0.01; }); }
+  // V4.28: periorbital flesh mask visibility/opacity
+  setPeriorbital(v) {
+    if (!this._periorbMats) return;
+    this._periorbMats.forEach(m => { m.opacity = v; });  // always transparent (alpha melt)
+    for (const eye of [this.left, this.right]) {
+      const mesh = eye?.group?.getObjectByName('periorbital');
+      if (mesh) mesh.visible = v > 0.02;
+    }
+  }
   rebuildLashes(bow = this._lashBowBuilt ?? 0) {
     // Live rebuild from lashConfig — lets the user tune density/thickness at full res.
     this._lashBowBuilt = bow;
@@ -3258,6 +3358,7 @@ class EyeController {
       // V4.26: socket 0.85 → 0 — sur fond quasi-noir, le dégradé brun du sprite
       // lisait comme un HALO lumineux derrière chaque œil, pas comme une ombre
       eyeScale: 0.72, eyeSpacing: 2.60, eyeTilt: 0, cyclops: 0, socket: 0,
+      periorb: 1.0,   // V4.28: masque périorbitaire (remplace le sprite socket)
       smoothing: 0.07, sensitivity: 1.0, maxTravel: 0.42, globeRotate: 0.8,
       parallaxX: 0, parallaxY: -0.08, vergenceBase: 0.04, vergenceMax: 0.3,
       reflectionIntensity: 1.0,
@@ -4766,6 +4867,7 @@ class DebugUI {
       case 'veins': r.setVeins(val); break;
       case 'meniscus': r.setMeniscus(val); break;
       case 'socket': r.setSocketOpacity(val); break;
+      case 'periorb': r.setPeriorbital(val); break;   // V4.28
       case 'scleraTint': r.setScleraTint(val); break;
       case 'irisDepth': r.setIrisDepth(val); break;
       case 'irisParallax': r.setIrisParallax(val); break;
@@ -4931,6 +5033,7 @@ async function main() {
   renderer.setVeins(p.veins);
   renderer.setMeniscus(p.meniscus);
   renderer.setSocketOpacity(p.socket);
+  renderer.setPeriorbital(p.periorb);              // V4.28
   renderer.setSkinDetail(p.skinDetail);            // V4.27
   SSS_SHARED.strength.value = p.skinSSS;           // V4.27
   renderer.setLimbusDark(p.limbusDark);
