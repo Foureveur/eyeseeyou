@@ -908,14 +908,25 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
   // V4.13: CLUSTER-COHERENT hairs — a real tuft shares its length/curl/sweep and
   // its hairs CONVERGE on a common tip. Per-hair deviation melts away as
   // `clumping` rises — that's what finally makes the tufts stick together.
+  // V4.31: SMOOTH FIELDS along the arc — a real fringe has a CONTINUOUS envelope:
+  // neighbouring lashes share almost the same length/curl/sweep, and the tip line
+  // undulates gently. Independent per-cluster randomness gave a chaotic cloud of
+  // spikes ("toujours à chier"). Low-freq value noise replaces it; a small
+  // per-hair deviation and ~5% stray rebels keep it organic.
+  const _ln = Array.from({ length: 24 }, () => Math.random());
+  const noise1 = (x) => {
+    const xi = Math.floor(x), xf = x - xi;
+    const a = _ln[((xi % 24) + 24) % 24], b = _ln[(((xi + 1) % 24) + 24) % 24];
+    return a + (b - a) * (xf * xf * (3 - 2 * xf));
+  };
   let tcWalk = 0.01 + Math.random() * 0.02;
   let cidGen = 0;
   while (tcWalk < 0.99) {
     const nIn = (isUpper ? 2 : 1) + Math.floor(Math.random() * 2.4);
     const cid = cidGen++;
-    const cLen = 0.88 + Math.random() * 0.22;
-    const cCurl = 0.85 + Math.random() * 0.30;
-    const cLat = (Math.random() - 0.5) * 0.10;
+    const cLen = 0.90 + 0.20 * noise1(tcWalk * 8);
+    const cCurl = 0.90 + 0.20 * noise1(tcWalk * 6 + 13.7);
+    const cLat = (noise1(tcWalk * 5 + 37.2) - 0.5) * 0.10;
     for (let ci = 0; ci < nIn; ci++) {
       slots.push({
         t: THREE.MathUtils.clamp(tcWalk + (Math.random() - 0.5) * intraJit * 2, 0, 1),
@@ -976,20 +987,22 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     Root.addScaledVector(N, Aant)
       .addScaledVector(T, sign * RR * (0.002 + rowFrac * 0.010))   // léger recul vers la peau
       .addScaledVector(B, (Math.random() - 0.5) * RR * 0.006);
-    const antRow = 0.72 + rowFrac * 0.5;                   // rangée antérieure = plus longue
+    const antRow = 0.85 + rowFrac * 0.30;   // V4.31: rangées moins disparates (0.72+0.5
+                                            // mettait courts et longs côte à côte = ébouriffé)
 
     // V4.13: cluster-shared parameters, per-hair deviation × dev
     // V4.16: shrink hard near the canthi ends
     const lenProfile = lerp(0.50, 1.10, Math.pow(temporal, 0.9)) * (0.80 + 0.20 * centre)
       * lerp(0.55, 1.0, THREE.MathUtils.smoothstep(centre, 0.10, 0.42));
+    // V4.31: tight per-hair deviation + ~5% stray rebels (the odd wild hair is
+    // what keeps a smooth fringe from looking combed/synthetic)
+    const stray = Math.random() < 0.05 ? 2.8 : 1.0;
     const L = RR * (isUpper ? 0.235 : 0.125) * LENM * fLen * lenProfile
-      * (slot.cLen + (Math.random() - 0.5) * 0.18 * dev) * antRow;
+      * (slot.cLen + (Math.random() - 0.5) * 0.07 * dev * stray) * antRow;
     const curl = CURLM * fCurl * lerp(1.0, 0.8, temporal) * (isUpper ? 1.0 : 0.62)
-      * (slot.cCurl + (Math.random() - 0.5) * 0.25 * dev);
-    // V4.18: splay boosted (±0.15) — the hairs used to sit in one plane like a
-    // fence; real lashes fan in DEPTH too
+      * (slot.cCurl + (Math.random() - 0.5) * 0.10 * dev * stray);
     const lat = fanDir * (0.03 + temporal * 0.22) * (isUpper ? 1 : 0.5) * (0.8 + 0.4 * FEM)
-      + slot.cLat + (Math.random() - 0.5) * 0.15 * dev;
+      + slot.cLat + (Math.random() - 0.5) * 0.06 * dev * stray;
 
     // J-curl bezier — V4.5: user-controllable PITCH. 0 = the lash leaves flat,
     // forward off the margin; 1 = steeply lifted along the lid tangent.
@@ -1010,8 +1023,8 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
     if (!clusterTipSet) { ClusterTip.copy(Tip); clusterTipSet = true; }
     else Tip.lerp(ClusterTip, Math.min(0.85, lashConfig.clumping * 0.9));
 
-    const rootR = RR * 0.0032 * THK * (0.78 + Math.random() * 0.5);
-    const shade = 0.8 + Math.random() * 0.45;
+    const rootR = RR * 0.0040 * THK * (0.85 + Math.random() * 0.30);  // V4.31: base plus
+    const shade = 0.8 + Math.random() * 0.45;                          // charnue, moins de 1px
     const base = verts.length / 3;
 
     for (let s = 0; s <= SEG; s++) {
@@ -1033,14 +1046,15 @@ function createLashGeometry(outerGeo, segsU, isUpper, lashCount = 240, isRight =
       Ax2.crossVectors(Tan, Ax1).normalize();
       // V4.18: sharper tip taper (pow 1.15, finer min) — the blunt 0.85 taper
       // read as painted hooks rather than hairs
-      const rad = Math.max(rootR * Math.pow(1 - v, 1.15), RR * 0.00025);
-      // keratin gradient: near-black root → warm dark-brown tip, with a subtle
-      // mid-strand light catch (real hair picks a highlight along its bow)
+      const rad = Math.max(rootR * Math.pow(1 - v, 1.3), RR * 0.00025);  // V4.31: pointe plus effilée
+      // keratin gradient: near-black root → warm chestnut tip, with a subtle
+      // mid-strand light catch. V4.31: tips much warmer/lighter — a 1px-thin tip
+      // that stays black reads as aliased wire; a light tip melts optically.
       const kv = Math.pow(v, 1.4);
       const midGlint = 1 + 0.35 * Math.sin(v * Math.PI);
-      const cr = (0.030 + 0.130 * kv) * shade * midGlint;
-      const cg = (0.020 + 0.085 * kv) * shade * midGlint;
-      const cb = (0.016 + 0.060 * kv) * shade * midGlint;
+      const cr = (0.045 + 0.26 * kv) * shade * midGlint;
+      const cg = (0.030 + 0.16 * kv) * shade * midGlint;
+      const cb = (0.024 + 0.10 * kv) * shade * midGlint;
       for (let k = 0; k < SIDES; k++) {
         const ang = (k / SIDES) * Math.PI * 2;
         const ox = Math.cos(ang), oy = Math.sin(ang);
