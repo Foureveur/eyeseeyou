@@ -224,9 +224,10 @@ Le plus gros gain perçu du projet, quasi que du code comportemental déjà maî
 6. Limbe : bande semi-transparente où la cornée chevauche l'iris périphérique.
 
 ### Sprint D — Peau & anatomie (~1–2 sessions) → v3.14
-1. Pre-integrated SSS (wrap + red shift par courbure) en remplacement du rim hack.
-2. Normal map peau générée : pores isotropes + rides fines le long de l'arc + crow's feet
-   temporales ; intensité ∝ fermeture pour les rides de compression.
+1. ✅ **v4.27** Pre-integrated SSS (bande rouge sur le terminator + transmission rétro-éclairée,
+   pondérées par la finesse ; le rim hack subsiste en appoint, slider « Skin SSS »).
+2. ✅ **v4.27** Normal map peau générée (Sobel 1024² : puits de pores, rides le long de l'arc,
+   micro-plis diagonaux croisés, slider « Skin Detail ») — crow's feet et rides ∝ fermeture restent à faire.
 3. **Caroncule + plica semilunaris** (petits meshes, shader peau + clearcoat humide) + lac lacrymal.
 3bis. **Peach fuzz** (signature TinyEye) : duvet vellus court sur la silhouette des paupières —
    soit ~200 micro-brins clairs quasi transparents réutilisant le système de brins du Sprint B,
@@ -234,16 +235,17 @@ Le plus gros gain perçu du projet, quasi que du code comportemental déjà maî
    au canthus interne dans le ramp albedo existant.
 4. Pli palpébral dynamique : le fold s'accumule à la fermeture (translation + amplification du
    profil `profFold` ∝ closure).
-5. Périorbitaire : remplacer le sprite socket par un maillage grossier (arcade sourcilière,
-   racine du nez) avec le shader peau — ancrage spatial des deux yeux.
+5. ✅ **v4.28** Périorbitaire : maillage 3D (arcade, pommette, mur nasal, dépression du canthus)
+   avec shader peau plain + fondu alpha radial vers le noir — remplace le sprite socket
+   (slider « Periorbital », le sprite reste dispo via « Halo (socket) »).
 6. Déplacement des paupières en vertex shader (perf + segsV 24).
 
 ### Sprint E — Photographie & outillage (~0.5–1 session) → v4.0
 1. EffectComposer : bloom subtil (threshold haut, les catchlights seulement), grain film,
    vignette, DOF léger.
 2. Micro-dérive caméra en mode immersed.
-3. **Mode référence** (photo overlay + blend slider) et **mode macro** (orbite ×4, comportement figé).
-   → À faire EN PREMIER dans le sprint si on veut s'en servir pour valider B/C/D.
+3. ✅ **v4.29** **Mode référence** (image locale en overlay opacité réglable ou demi-écran) et
+   **mode macro** (glissé caméra sur un œil, zoom 0.5–2.5, l'œil continue de vivre).
 4. Screenshot (touche `s`), export/import de presets complets.
 
 ### Ordre recommandé
