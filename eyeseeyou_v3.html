@@ -453,6 +453,19 @@ const photoConfig = {
   cameraDrift: 1.0,   // hand-held framing drift multiplier
 };
 
+// V4.29 (roadmap Sprint E): MACRO INSPECTION — the camera glides into a close-up
+// of one eye so the micro-detail work (POM iris, pores, meniscus, lash roots) can
+// actually be SEEN. The eye keeps living (gaze, FEM, blinks) while inspected.
+const macroConfig = {
+  enabled: false,
+  zoom: 1.0,          // 0.5 = wide close-up … 2.5 = iris fills the frame
+  side: 'left',       // which eye to inspect
+};
+
+// V4.29: REFERENCE OVERLAY — a photo (TinyEye, macro shot…) blended over the
+// render, or split half-screen, to compare against the target while tuning.
+const refConfig = { opacity: 0.5, split: false, visible: false };
+
 // V3.4: hand tracking — a pointing finger outranks the face; the eye locks on the
 // fingertip of the hand CLOSEST to the camera and goes cross-eyed as it approaches
 // (targetZ is allowed past 1.0 → the convergence target moves right up to the eyes).
@@ -4994,7 +5007,7 @@ async function main() {
   const controller = new EyeController();
   const tracker = new FaceTracker(controller);
   // V3.4: console debug handle (e.g. simulate a finger: __eye.controller.hand = {...})
-  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig, headConfig, softSkinConfig };
+  window.__eye = { controller, tracker, renderer, handConfig, weightConfig, convergenceConfig, lashConfig, femConfig, pupilPhysConfig, photoConfig, exposureConfig, headConfig, softSkinConfig, macroConfig, refConfig };
   const ui = new DebugUI(controller, renderer);
 
   renderer.setBgColor('#050508');
@@ -5285,6 +5298,45 @@ async function main() {
   gPhoto.add(photoConfig, 'cameraDrift', 0, 2, 0.05).name('camera drift');
   gPhoto.close();
 
+  // V4.29: macro inspection
+  const gMacro = gui.addFolder('Macro (v4.29)');
+  gMacro.add(macroConfig, 'enabled').name('macro inspection');
+  gMacro.add(macroConfig, 'zoom', 0.5, 2.5, 0.05).name('zoom');
+  gMacro.add(macroConfig, 'side', ['left', 'right']).name('eye');
+  gMacro.close();
+
+  // V4.29: reference-photo overlay
+  const refImg = document.createElement('img');
+  refImg.id = 'ref-overlay';
+  refImg.className = 'ui-layer';
+  refImg.style.cssText = 'position:fixed;inset:0;width:100vw;height:100vh;object-fit:contain;pointer-events:none;z-index:60;display:none;';
+  document.body.appendChild(refImg);
+  const refInput = document.createElement('input');
+  refInput.type = 'file'; refInput.accept = 'image/*'; refInput.style.display = 'none';
+  document.body.appendChild(refInput);
+  const updateRefOverlay = () => {
+    refImg.style.display = (refConfig.visible && refImg.src) ? 'block' : 'none';
+    refImg.style.opacity = refConfig.opacity;
+    refImg.style.clipPath = refConfig.split ? 'inset(0 0 0 50%)' : 'none';
+  };
+  refInput.onchange = () => {
+    const f = refInput.files && refInput.files[0];
+    if (!f) return;
+    if (refImg.src && refImg.src.startsWith('blob:')) URL.revokeObjectURL(refImg.src);
+    refImg.src = URL.createObjectURL(f);
+    refConfig.visible = true;
+    refCtrls.forEach(c => c.updateDisplay());
+    updateRefOverlay();
+  };
+  const gRef = gui.addFolder('Reference (v4.29)');
+  gRef.add({ load: () => refInput.click() }, 'load').name('charger une image…');
+  const refCtrls = [
+    gRef.add(refConfig, 'visible').name('afficher').onChange(updateRefOverlay),
+    gRef.add(refConfig, 'opacity', 0, 1, 0.02).name('opacité').onChange(updateRefOverlay),
+    gRef.add(refConfig, 'split').name('demi-écran').onChange(updateRefOverlay),
+  ];
+  gRef.close();
+
   const gTrack = gui.addFolder('Camera feed');
   const applyMirrorCss = () => {
     const t = cameraDisplay.mirror ? 'scaleX(-1)' : 'scaleX(1)';
@@ -5316,6 +5368,10 @@ async function main() {
   }
 
   // Render loop
+  // V4.29: macro camera state (smoothed blend + reusable temps)
+  let _macroM = 0, _macroPrevT = 0;
+  const _macroTgt = new THREE.Vector3(), _macroPos = new THREE.Vector3(), _macroLook = new THREE.Vector3();
+
   function animate() {
     requestAnimationFrame(animate);
     const dt = renderer.clock.getDelta();
@@ -5458,9 +5514,36 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     const breathK = 1 - controller._freeze;
     renderer.eyeGroup.position.y = (Math.sin(bt * 1.45) * 0.0075 + Math.sin(bt * 3.05 + 1.3) * 0.0018) * breathK;
     // V4.0: hand-held camera drift — the framing itself breathes like a real shot
-    const cd = photoConfig.cameraDrift;
-    renderer.camera.position.x = Math.sin(bt * 0.131) * 0.013 * cd;
-    renderer.camera.position.y = Math.cos(bt * 0.177 + 0.8) * 0.010 * cd;
+    // V4.29: macro inspection — smoothed glide toward a close-up of one eye; the
+    // drift survives at 30% so the macro still feels hand-held, not tripod-dead.
+    const _mdt = Math.min(0.1, bt - (_macroPrevT || bt)); _macroPrevT = bt;
+    _macroM += ((macroConfig.enabled ? 1 : 0) - _macroM) * Math.min(1, _mdt * 2.0);
+    const m = _macroM < 0.0005 ? 0 : _macroM;
+    const cd = photoConfig.cameraDrift * (1 - m * 0.7);
+    const drx = Math.sin(bt * 0.131) * 0.013 * cd;
+    const dry = Math.cos(bt * 0.177 + 0.8) * 0.010 * cd;
+    if (m > 0) {
+      const eye = (macroConfig.side === 'right' ? renderer.right : renderer.left) || renderer.left;
+      eye.group.getWorldPosition(_macroTgt);
+      const dist = 1.55 / macroConfig.zoom;
+      _macroPos.set(_macroTgt.x + drx + 0.10, _macroTgt.y + dry + 0.05, _macroTgt.z + dist);
+      renderer.camera.position.set(
+        drx + (_macroPos.x - drx) * m,
+        dry + (_macroPos.y - dry) * m,
+        5 + (_macroPos.z - 5) * m,
+      );
+      _macroLook.set(
+        renderer.camera.position.x + (_macroTgt.x - renderer.camera.position.x) * m,
+        renderer.camera.position.y + (_macroTgt.y - renderer.camera.position.y) * m,
+        _macroTgt.z * m,
+      );
+      renderer.camera.lookAt(_macroLook);
+    } else {
+      renderer.camera.position.x = drx;
+      renderer.camera.position.y = dry;
+      renderer.camera.position.z = 5;
+      renderer.camera.rotation.set(0, 0, 0);
+    }
     // V4.10: head orientation (+ optional idle sway) — the gaze compensates in
     // setGaze, so the eyes keep looking at the tracked target while the head turns
     const swayY = headConfig.sway ? Math.sin(bt * 0.31) * headConfig.swayAmp : 0;
