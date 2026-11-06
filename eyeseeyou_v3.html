@@ -1,10 +1,12 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="fr">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
 <meta name="apple-mobile-web-app-capable" content="yes"><meta name="theme-color" content="#000000">
-<title>EyeSeeYou v4</title>
+<title>EyeSeeYou — Présence</title>
+<meta name="description" content="Une étude du vivant. Deux yeux procéduraux, un regard qui vous suit. Une expérience 3D interactive de Partiqle Studio.">
+<link rel="stylesheet" href="presence.css">
 <style>
 @import url('https://fonts.googleapis.com/css2?family=Space+Mono:wght@400;700&display=swap');
 *{margin:0;padding:0;box-sizing:border-box;}
@@ -261,6 +263,7 @@ body.immersed.ui-peek #immerse-btn{opacity:1;pointer-events:auto;}
 <script type="module">
 import * as THREE from 'three';
 import GUI from 'lil-gui';
+import { createPresence } from './presence.js';
 // V4.0: photographic post chain
 import { EffectComposer } from 'three/addons/postprocessing/EffectComposer.js';
 import { RenderPass } from 'three/addons/postprocessing/RenderPass.js';
@@ -1422,9 +1425,18 @@ const EYE_GLSL_COLOR = /* glsl */`
   irisCol *= mix(1.0, 0.80 + 0.40 * fib2, uFibers);           // fine secondary fibers
   float fib3 = 1.0 - abs(2.0 * eyeNoiseP(vec2(thN * 160.0 + 3.1, rT * 14.0), 160.0) - 1.0);
   irisCol *= mix(1.0, 0.78 + 0.45 * pow(fib3, 2.0), uFibers * 0.7);  // crisp ridged strands
-  irisCol = mix(irisCol, irisCol * 0.55, smoothstep(0.55, 0.20, crypt) * 0.45); // crypts
+  irisCol = mix(irisCol, irisCol * 0.55, (1.0 - smoothstep(0.20, 0.55, crypt)) * 0.45); // crypts
   irisCol *= mix(0.82, 1.0, smoothstep(collR - 0.12, collR + 0.10, rr));        // pupillary zone darker
   irisCol *= 1.0 + collBand * 0.30;                            // collarette ridge
+  // Fine, irregular contraction furrows in tissue space. Periodic angular noise
+  // keeps the iris seamless; fwidth avoids shimmering in the wide shot.
+  float furrowPhase = rT * 92.0 + eyeNoiseP(vec2(thN * 18.0, 2.0), 18.0) * 5.0;
+  float furrowAA = max(fwidth(furrowPhase), 0.08);
+  float furrow = 1.0 - smoothstep(0.08, 0.08 + furrowAA, abs(sin(furrowPhase)));
+  irisCol *= 1.0 - furrow * smoothstep(0.58, 0.88, rT) * uFibers * 0.16;
+  // Sparse pigment islands, anchored to the iris instead of screen coordinates.
+  float pigment = smoothstep(0.77, 0.9, eyeNoiseP(vec2(thN * 72.0, rT * 27.0), 72.0));
+  irisCol *= 1.0 - pigment * smoothstep(0.35, 0.6, rT) * 0.24;
   // light crescent: light refracted through the cornea brightens the far side
   float cres = 0.5 + 0.5 * dot(normalize(q + vec2(1e-4)), normalize(-uLightXY));
   irisCol *= 0.85 + 0.30 * cres;
@@ -4329,11 +4341,27 @@ class FaceTracker {
     await new Promise(r => { this.video.onloadedmetadata = r; });
     try { await this.video.play(); } catch (e) { document.addEventListener('touchstart', async () => { await this.video.play(); }, { once: true }); }
     if ('wakeLock' in navigator) try { await navigator.wakeLock.request('screen'); } catch (e) {}
+    this._running = true;
     this._loop();
   }
 
+  stop() {
+    this._running = false;
+    cancelAnimationFrame(this._trackingFrame);
+    this.video?.srcObject?.getTracks().forEach(t => t.stop());
+    if (this.video) this.video.srcObject = null;
+    this.video = null;
+    this.landmarker?.close(); this.landmarker = null;
+    this.hands?.close(); this.hands = null;
+    this.controller.face.detected = false;
+    this.controller.hand.detected = false;
+  }
+
   initPointerFallback() {
+    if (this._pointerBound) return;
+    this._pointerBound = true;
     const h = (x, y) => {
+      if (this.video?.srcObject?.active) return;
       const p = this.controller.params;
       this.controller.face.x = (x / innerWidth * 2 - 1) * p.sensitivity + p.parallaxX;
       this.controller.face.y = -(y / innerHeight * 2 - 1) * p.sensitivity + p.parallaxY;
@@ -4348,9 +4376,10 @@ class FaceTracker {
   }
 
   _loop() {
-    if (!this.landmarker || !this.video || this.video.readyState < 2) { requestAnimationFrame(() => this._loop()); return; }
+    if (!this._running) return;
+    if (!this.landmarker || !this.video || this.video.readyState < 2) { this._trackingFrame = requestAnimationFrame(() => this._loop()); return; }
     const now = performance.now();
-    if (now - this._lastTime < this._interval) { requestAnimationFrame(() => this._loop()); return; }
+    if (now - this._lastTime < this._interval) { this._trackingFrame = requestAnimationFrame(() => this._loop()); return; }
     this._lastTime = now;
     let res = null;
     try { res = this.landmarker.detectForVideo(this.video, now); } catch (e) { /* transient decode errors */ }
@@ -4453,7 +4482,7 @@ class FaceTracker {
     } else if (handPointing && !this.controller.face.detected) {
       setStatus('active', '☝ Following finger');
     }
-    requestAnimationFrame(() => this._loop());
+    this._trackingFrame = requestAnimationFrame(() => this._loop());
   }
 
   // V3.4: hand pass — picks the hand CLOSEST to the camera (largest apparent size),
@@ -4643,7 +4672,7 @@ class DebugUI {
     });
 
     document.addEventListener('keydown', e => {
-      if (e.key === 'Tab') { e.preventDefault(); document.getElementById('panel').classList.toggle('open'); }
+      if (e.key === 'Tab' && document.body.classList.contains('laboratory') && !document.getElementById('panel').classList.contains('open')) { e.preventDefault(); document.getElementById('panel').classList.toggle('open'); }
       if (e.key === 'f' || e.key === 'F') { if (!document.fullscreenElement) document.documentElement.requestFullscreen?.(); else document.exitFullscreen?.(); }
       if (e.key === 'd' || e.key === 'D') {
         // V3.5: toggle video + landmark overlay together (feed is ON by default)
@@ -5294,7 +5323,7 @@ async function main() {
 
   // V2.3+V2.6: live webcam + tracking overlay + mirror (DISPLAY ONLY)
   // V3.5: webcam feed ON by default — hand/gesture debugging is much easier with it
-  const tracking = { showWebcam: true };
+  const tracking = { showWebcam: false };
   // V3.4: hand tracking controls
   const gHand = gui.addFolder('Hand tracking');
   gHand.add(handConfig, 'enabled').name('follow pointing finger');
@@ -5371,18 +5400,10 @@ async function main() {
   gTrack.close();
   applyWebcamVisibility();   // V3.5: applies the ON-by-default state at startup
 
-  // Start tracking
-  setLoadingStatus('Initializing tracking...');
-  try {
-    await tracker.init();
-    document.getElementById('loading').classList.add('hidden');
-    setStatus('active', 'Face tracking active');
-  } catch (err) {
-    console.warn('Tracking fallback:', err.message);
-    document.getElementById('loading').classList.add('hidden');
-    setStatus('inactive', 'Pointer mode');
-    tracker.initPointerFallback();
-  }
+  // Render immediately. MediaPipe and camera permission are only requested by
+  // the visible camera button, so a slow model download cannot hide the eyes.
+  const presence = createPresence({ renderer, controller, tracker,
+    macroConfig, photoConfig, applyPersonality });
 
   // Render loop
   // V4.29: macro camera state (smoothed blend + reusable temps)
@@ -5391,7 +5412,8 @@ async function main() {
 
   function animate() {
     requestAnimationFrame(animate);
-    const dt = renderer.clock.getDelta();
+    const dt = Math.min(renderer.clock.getDelta(), 0.05);
+    presence.update(dt);
     const p = controller.params;
     const cyclops = p.cyclops > 0.5;
 
@@ -5535,8 +5557,12 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     // drift survives at 30% so the macro still feels hand-held, not tripod-dead.
     const _mdt = Math.min(0.1, bt - (_macroPrevT || bt)); _macroPrevT = bt;
     _macroM += ((macroConfig.enabled ? 1 : 0) - _macroM) * Math.min(1, _mdt * 2.0);
+    const reducedMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
+    if (reducedMotion) _macroM = macroConfig.enabled ? 1 : 0;
     const m = _macroM < 0.0005 ? 0 : _macroM;
-    const cd = photoConfig.cameraDrift * (1 - m * 0.7);
+    // Keep both eyes in frame on portrait displays, including the zoom return.
+    const wideDistance = Math.max(5, 4.1 / renderer.camera.aspect);
+    const cd = reducedMotion ? 0 : photoConfig.cameraDrift * (1 - m * 0.7);
     const drx = Math.sin(bt * 0.131) * 0.013 * cd;
     const dry = Math.cos(bt * 0.177 + 0.8) * 0.010 * cd;
     if (m > 0) {
@@ -5555,7 +5581,7 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
       renderer.camera.position.set(
         drx + (_macroPos.x - drx) * m,
         dry + (_macroPos.y - dry) * m,
-        5 + (_macroPos.z - 5) * m,
+        wideDistance + (_macroPos.z - wideDistance) * m,
       );
       _macroLook.set(
         renderer.camera.position.x + (_macroTgt.x - renderer.camera.position.x) * m,
@@ -5566,7 +5592,7 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
     } else {
       renderer.camera.position.x = drx;
       renderer.camera.position.y = dry;
-      renderer.camera.position.z = 5;
+      renderer.camera.position.z = wideDistance;
       renderer.camera.rotation.set(0, 0, 0);
       if (renderer.camera.fov !== 38) { renderer.camera.fov = 38; renderer.camera.updateProjectionMatrix(); }
     }
@@ -5583,7 +5609,11 @@ pulse:      ${controller._emoPulse.intensity > 0.01 ? controller._emoPulse.name 
   animate();
 }
 
-main();
+main().catch(error => {
+  console.error('EyeSeeYou initialization failed:', error);
+  document.getElementById('loading-status').textContent =
+    'Le rendu 3D est indisponible. Rechargez la page dans un navigateur compatible WebGL.';
+});
 </script>
 </body>
 </html>
